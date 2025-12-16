@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { analyzeTrades } from '@/lib/trade-analysis';
 import { Badge } from '@/components/ui/badge';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo, useRef } from 'react';
 import { TradeRow } from './TradeRow';
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -41,22 +41,18 @@ export function TradeFeed({
     overscan: 5, // number of items to render outside of the visible area
   });
 
-  // Handle infinite scroll
-  useEffect(() => {
-    const virtualItems = virtualizer.getVirtualItems();
-    const [lastItem] = [...virtualItems].reverse();
-
-    if (!lastItem) return;
-
-    // If we're near the bottom (within 5 items), trigger load more
+  // Handle infinite scroll via scroll event
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollHeight, scrollTop, clientHeight } = e.currentTarget;
+    // Trigger when within 200px of bottom
     if (
+      scrollHeight - scrollTop - clientHeight < 200 &&
       onLoadMore &&
-      !loadingMore &&
-      lastItem.index >= analyzedTrades.length - 5
+      !loadingMore
     ) {
       onLoadMore();
     }
-  }, [virtualizer, onLoadMore, loadingMore, analyzedTrades.length]);
+  };
 
   return (
     <Card className="border-border bg-card text-card-foreground flex h-full flex-col overflow-hidden shadow-lg">
@@ -125,7 +121,11 @@ export function TradeFeed({
             </div>
 
             {/* List Container */}
-            <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
+            <div
+              ref={parentRef}
+              className="min-h-0 flex-1 overflow-auto"
+              onScroll={handleScroll}
+            >
               {analyzedTrades.length === 0 ? (
                 <div className="text-muted-foreground py-10 text-center italic">
                   Waiting for trades...
