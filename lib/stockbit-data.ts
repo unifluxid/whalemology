@@ -4,13 +4,16 @@ import {
   EmittenInfo,
   MarketDetector,
   RunningTrade,
+  WatchlistResponse,
+  SearchResponse,
 } from './stockbit-types';
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
 export async function fetchStockbitData<T>(
   endpoint: string,
-  token?: string
+  token?: string,
+  method: 'GET' | 'POST' = 'GET'
 ): Promise<T> {
   const headers: HeadersInit = {};
   if (token) {
@@ -18,6 +21,7 @@ export async function fetchStockbitData<T>(
   }
 
   const res = await fetch(`/api/stockbit/${endpoint}`, {
+    method: method,
     headers: headers,
   });
   if (!res.ok) {
@@ -66,6 +70,7 @@ export async function getEmittenInfo(
 
 export interface RunningTradeFilters {
   symbol?: string;
+  symbols?: string[]; // Array of symbols to filter
   trade_number?: string;
   action_type?:
     | 'RUNNING_TRADE_ACTION_TYPE_ALL'
@@ -94,7 +99,14 @@ export async function getRunningTrade(
 ): Promise<RunningTrade> {
   if (USE_MOCK) return MOCK_RUNNING_TRADE;
 
-  const symbolParam = symbol ? `&symbols[]=${symbol}` : '';
+  // Handle both single symbol and symbols array from filters
+  let symbolsParam = '';
+  if (filters?.symbols && filters.symbols.length > 0) {
+    symbolsParam = filters.symbols.map((s) => `&symbols[]=${s}`).join('');
+  } else if (symbol) {
+    symbolsParam = `&symbols[]=${symbol}`;
+  }
+
   const tradeNumberParam = trade_number ? `&trade_number=${trade_number}` : '';
   const date = filters?.date || new Date().toISOString().split('T')[0];
 
@@ -119,7 +131,7 @@ export async function getRunningTrade(
 
   // Based on running-trade.txt
   return fetchStockbitData<RunningTrade>(
-    `order-trade/running-trade?limit=80&sort=desc&order_by=RUNNING_TRADE_ORDER_BY_TIME&action_type=${actionType}&market_board=${marketBoard}&date=${date}${symbolParam}${tradeNumberParam}${minLot}${priceFrom}${priceTo}${timeStart}${timeEnd}`,
+    `order-trade/running-trade?limit=80&sort=desc&order_by=RUNNING_TRADE_ORDER_BY_TIME&action_type=${actionType}&market_board=${marketBoard}&date=${date}${symbolsParam}${tradeNumberParam}${minLot}${priceFrom}${priceTo}${timeStart}${timeEnd}`,
     token
   );
 }
@@ -132,6 +144,41 @@ export async function getChartbitPrice(
   // Based on chartbit-price.txt: chartbit/SAME/price/daily
   return fetchStockbitData<ChartbitPrice>(
     `chartbit/${symbol}/price/daily?limit=50`,
+    token
+  );
+}
+
+export interface WatchlistOptions {
+  page?: number;
+  limit?: number;
+  sort_by?: 'symbol' | 'last' | 'change' | 'percent' | 'bid' | 'offer';
+  sort_dir?: 'asc' | 'desc';
+}
+
+export async function getWatchlistSymbols(
+  watchlistId: number,
+  token?: string,
+  options?: WatchlistOptions
+): Promise<WatchlistResponse> {
+  const page = options?.page || 1;
+  const limit = options?.limit || 50;
+  const sortBy = options?.sort_by ? `&sort_by=${options.sort_by}` : '';
+  const sortDir = options?.sort_dir ? `&sort_dir=${options.sort_dir}` : '';
+
+  // Based on GET watchlist/{watchlist_id}?page=1&limit=50
+  return fetchStockbitData<WatchlistResponse>(
+    `watchlist/${watchlistId}?page=${page}&limit=${limit}${sortBy}${sortDir}`,
+    token
+  );
+}
+
+export async function searchSymbols(
+  keyword: string,
+  token?: string
+): Promise<SearchResponse> {
+  // Based on search.md: GET search?keyword={keyword}&page=0&type=company
+  return fetchStockbitData<SearchResponse>(
+    `search?keyword=${encodeURIComponent(keyword)}&page=0&type=company`,
     token
   );
 }

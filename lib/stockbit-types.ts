@@ -162,3 +162,97 @@ export interface TradeItem {
   seller_type: string;
   market_board: string;
 }
+
+export interface WatchlistSymbol {
+  symbol: string;
+  symbol2: string;
+  symbol3: string;
+  country: string;
+  exchange: string;
+  status: number;
+  id: string;
+  name: string;
+  sequence_no: number;
+  icon_url: string;
+  last: string;
+  change: string;
+  percent: string;
+  previous: string;
+  tradeable: boolean;
+  type: string;
+  orderbook: {
+    bid: string;
+    offer: string;
+  };
+  prices: string[];
+  column: unknown[];
+  notations: unknown[];
+  uma: boolean;
+  corp_action: {
+    active: boolean;
+    icon: string;
+    text: string;
+  };
+  formatted_price: string;
+  notation: unknown[];
+  volume: string;
+  extra_attributes: unknown;
+}
+
+export interface WatchlistResponse {
+  message: string;
+  data: {
+    watchlist_id: number;
+    name: string;
+    descriptions: string;
+    header: string[];
+    header_custom: string[];
+    result: WatchlistSymbol[];
+    total: number;
+    type: string;
+    is_default: boolean;
+    emoji: string;
+    pagination: {
+      is_last_page: boolean;
+    };
+    sort_by: string;
+    sort_dir: string;
+    sort_desc: string;
+  };
+}
+
+export interface SearchCompany {
+  id: string;
+  name: string;
+  country: string;
+  desc: string;
+  exchange: string;
+  is_following: boolean;
+  img: string;
+  is_verified: boolean;
+  other: string;
+  status: string;
+  symbol_2: string;
+  symbol_3: string;
+  total_followers: number;
+  is_tradeable: boolean;
+  type: string;
+  url: string;
+  icon_url: string;
+}
+
+export interface SearchResponse {
+  message: string;
+  data: {
+    chat: unknown[];
+    company: SearchCompany[];
+    insider: unknown[];
+    people: unknown[];
+    sector: unknown[];
+    pagination: {
+      has_more_companies: boolean;
+      has_more_insiders: boolean;
+      has_more_users: boolean;
+    };
+  };
+}

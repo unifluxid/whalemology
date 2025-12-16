@@ -7,6 +7,7 @@ interface User {
   email: string;
   fullname: string;
   avatar: string;
+  watchlist_id: number;
 }
 
 interface AuthState {

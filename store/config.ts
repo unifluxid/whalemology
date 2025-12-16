@@ -6,6 +6,8 @@ interface ConfigState {
   setPollInterval: (interval: number) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
+  selectedSymbols: string[];
+  setSelectedSymbols: (symbols: string[]) => void;
 }
 
 export const useConfigStore = create<ConfigState>()(
@@ -15,6 +17,8 @@ export const useConfigStore = create<ConfigState>()(
       setPollInterval: (interval) => set({ pollInterval: interval }),
       theme: 'dark',
       setTheme: (theme) => set({ theme }),
+      selectedSymbols: [],
+      setSelectedSymbols: (symbols) => set({ selectedSymbols: symbols }),
     }),
     {
       name: 'whalemology-config',

@@ -33,6 +33,7 @@ export function TradeFeed({
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Create virtualizer instance
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: analyzedTrades.length,
     getScrollElement: () => parentRef.current,

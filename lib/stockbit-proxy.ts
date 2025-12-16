@@ -47,10 +47,21 @@ export async function fetchStockbitProxy(
     }
 
     // 4. Forward Request
+    // Handle POST body - if no body provided, send empty JSON
+    let body: string | undefined = undefined;
+    if (request.method !== 'GET') {
+      const contentLength = request.headers.get('content-length');
+      if (contentLength && parseInt(contentLength) > 0) {
+        body = await request.text();
+      } else {
+        body = '{}'; // Send empty JSON for POST with no body
+      }
+    }
+
     const response = await fetch(targetUrl, {
       method: request.method,
       headers: headers,
-      body: request.method !== 'GET' ? request.body : undefined,
+      body: body,
       // @ts-expect-error - duplex needed for streaming
       duplex: 'half',
     });

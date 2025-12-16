@@ -6,8 +6,13 @@ import { useAuthStore, useConfigStore } from '@/store';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
 import { AnomalyCard } from '@/components/whalemology/AnomalyCard';
 import { FilterPopover } from '@/components/whalemology/FilterPopover';
-import { getRunningTrade, RunningTradeFilters } from '@/lib/stockbit-data';
-import { RunningTrade } from '@/lib/stockbit-types';
+import {
+  getRunningTrade,
+  RunningTradeFilters,
+  getWatchlistSymbols,
+  searchSymbols,
+} from '@/lib/stockbit-data';
+import { RunningTrade, WatchlistSymbol } from '@/lib/stockbit-types';
 import { aggregateStockAnomalies } from '@/lib/trade-analysis';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
@@ -25,11 +30,20 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { useDebouncedCallback } from '@/hooks/use-debounce';
+
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  MultiSelect,
+  MultiSelectContent,
+  MultiSelectItem,
+  MultiSelectTrigger,
+  MultiSelectValue,
+} from '@/components/ui/multi-select';
 import { Calendar as CalendarIcon, TrendingUp, DollarSign } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -40,7 +54,8 @@ export default function GlobalRunningTradePage() {
   const initialLoadRef = useRef(false);
 
   // -- Local State for Settings (Refactored from Global Store) --
-  const { pollInterval } = useConfigStore();
+  const { pollInterval, selectedSymbols, setSelectedSymbols } =
+    useConfigStore();
   const [minConfidenceScore, setMinConfidenceScore] = useState(1);
   const [minTotalValue, setMinTotalValue] = useState(0);
   const [showOnlyWhales, setShowOnlyWhales] = useState(false);
@@ -64,6 +79,14 @@ export default function GlobalRunningTradePage() {
   const [data, setData] = useState<RunningTrade | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Symbol multi-select state
+  const { user } = useAuthStore();
+  const [watchlistSymbols, setWatchlistSymbols] = useState<WatchlistSymbol[]>(
+    []
+  );
+  const [searchResults, setSearchResults] = useState<WatchlistSymbol[]>([]);
+  const [searchKeyword, setSearchKeyword] = useState('');
 
   const resetFilters = useCallback(() => {
     setMinConfidenceScore(1);
@@ -115,6 +138,7 @@ export default function GlobalRunningTradePage() {
           : new Date().toISOString().split('T')[0],
       order_by: orderByMap[sortBy],
       sort: sortOrder,
+      symbols: selectedSymbols.length > 0 ? selectedSymbols : undefined,
     };
   }, [
     actionTypeFilter,
@@ -127,6 +151,7 @@ export default function GlobalRunningTradePage() {
     selectedDate,
     sortBy,
     sortOrder,
+    selectedSymbols,
   ]);
 
   // Fetch trades with filters
@@ -185,6 +210,86 @@ export default function GlobalRunningTradePage() {
       setLoading(false);
     }
   }, [token, fetchTrades]);
+
+  // Load watchlist symbols on mount
+  useEffect(() => {
+    const loadWatchlist = async () => {
+      if (!token || !user?.watchlist_id) return;
+
+      try {
+        const response = await getWatchlistSymbols(user.watchlist_id, token);
+        setWatchlistSymbols(response.data.result);
+
+        // If no symbols are selected yet, pre-load all watchlist symbols
+        if (selectedSymbols.length === 0) {
+          const symbols = response.data.result.map((s) => s.symbol);
+          setSelectedSymbols(symbols);
+        }
+      } catch (error) {
+        console.error('Failed to load watchlist', error);
+      }
+    };
+
+    loadWatchlist();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, user]);
+
+  // Refetch trades when selected symbols change
+  useEffect(() => {
+    handleFilterApply();
+  }, [selectedSymbols, handleFilterApply]);
+
+  const debouncedSetSearchKeyword = useDebouncedCallback(setSearchKeyword, 300);
+
+  // Handle symbol search
+  useEffect(() => {
+    if (!searchKeyword || !token) {
+      setSearchResults([]);
+      return;
+    }
+
+    const search = async () => {
+      try {
+        const response = await searchSymbols(searchKeyword, token);
+        // Convert search results to watchlist symbol format
+        const symbols: WatchlistSymbol[] = response.data.company
+          .filter((company) => company.type === 'Saham')
+          .map((company) => ({
+            symbol: company.name,
+            symbol2: company.symbol_2,
+            symbol3: company.symbol_3,
+            country: company.country,
+            exchange: company.exchange,
+            status: parseInt(company.status),
+            id: company.id,
+            name: company.desc,
+            sequence_no: 0,
+            icon_url: company.icon_url,
+            last: '',
+            change: '',
+            percent: '',
+            previous: '',
+            tradeable: company.is_tradeable,
+            type: company.type,
+            orderbook: { bid: '', offer: '' },
+            prices: [],
+            column: [],
+            notations: [],
+            uma: false,
+            corp_action: { active: false, icon: '', text: '' },
+            formatted_price: '',
+            notation: [],
+            volume: '',
+            extra_attributes: null,
+          }));
+        setSearchResults(symbols);
+      } catch (error) {
+        console.error('Failed to search symbols', error);
+      }
+    };
+
+    search();
+  }, [searchKeyword, token]);
 
   // Sync session
   useEffect(() => {
@@ -465,6 +570,53 @@ export default function GlobalRunningTradePage() {
                 onApply={handleFilterApply}
                 onReset={handleFilterReset}
               />
+              {/* Multi select */}
+              <MultiSelect
+                values={selectedSymbols}
+                onValuesChange={setSelectedSymbols}
+              >
+                <MultiSelectTrigger className="w-[200px]">
+                  <MultiSelectValue
+                    overflowBehavior="cutoff"
+                    placeholder={
+                      selectedSymbols.length > 0
+                        ? `${selectedSymbols.length} Selected`
+                        : 'All Stocks'
+                    }
+                  />
+                </MultiSelectTrigger>
+                <MultiSelectContent
+                  search={{
+                    placeholder: 'Search symbols...',
+                    emptyMessage: 'No symbols found.',
+                  }}
+                  onValueChange={debouncedSetSearchKeyword}
+                >
+                  {/* Show watchlist symbols ONLY when not searching */}
+                  {!searchKeyword &&
+                    watchlistSymbols.map((symbol) => (
+                      <MultiSelectItem
+                        key={symbol.symbol}
+                        value={symbol.symbol}
+                        badgeLabel={symbol.symbol}
+                      >
+                        {symbol.symbol}
+                      </MultiSelectItem>
+                    ))}
+
+                  {/* Show search results when searching */}
+                  {searchKeyword &&
+                    searchResults.map((symbol) => (
+                      <MultiSelectItem
+                        key={`search-${symbol.symbol}`}
+                        value={symbol.symbol}
+                        badgeLabel={symbol.symbol}
+                      >
+                        {symbol.symbol}
+                      </MultiSelectItem>
+                    ))}
+                </MultiSelectContent>
+              </MultiSelect>
             </div>
           </div>
 
