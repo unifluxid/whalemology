@@ -33,12 +33,12 @@ export function TradeFeed({
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Create virtualizer instance
-  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: analyzedTrades.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 45, // estimated row height
     overscan: 5, // number of items to render outside of the visible area
+    measureElement: (element) => element?.getBoundingClientRect().height,
   });
 
   // Handle infinite scroll via scroll event
