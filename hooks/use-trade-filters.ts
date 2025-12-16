@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { RunningTradeFilters } from '@/lib/stockbit-data';
+import { useConfigStore } from '@/store';
 
 export type TradeSortOption = 'time' | 'lot';
 export type TradeSortOrder = 'asc' | 'desc';
@@ -38,6 +39,7 @@ export function useTradeFilters({
   const [minConfidenceScore, setMinConfidenceScore] = useState(1);
   const [minTotalValue, setMinTotalValue] = useState(0);
   const [showOnlyWhales, setShowOnlyWhales] = useState(false);
+  const { useWatchlist, setUseWatchlist } = useConfigStore();
 
   const resetFilters = useCallback(() => {
     setActionTypeFilter('all');
@@ -58,6 +60,7 @@ export function useTradeFilters({
     setMinConfidenceScore(1);
     setMinTotalValue(0);
     setShowOnlyWhales(false);
+    // setUseWatchlist(false); // Can decide if we want to reset this pref too, usually no for config
   }, []);
 
   const handleSortChange = useCallback((newSortBy: TradeSortOption) => {
@@ -152,6 +155,8 @@ export function useTradeFilters({
     setMinTotalValue,
     showOnlyWhales,
     setShowOnlyWhales,
+    useWatchlist,
+    setUseWatchlist,
 
     // Actions
     resetFilters,

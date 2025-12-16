@@ -37,7 +37,12 @@ import {
   MultiSelectTrigger,
   MultiSelectValue,
 } from '@/components/ui/multi-select';
-import { Calendar as CalendarIcon, TrendingUp, DollarSign } from 'lucide-react';
+import {
+  Calendar as CalendarIcon,
+  TrendingUp,
+  DollarSign,
+  Star,
+} from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -88,6 +93,8 @@ export default function GlobalRunningTradePage() {
     handleSortChange,
     // Computed
     apiFilters,
+    useWatchlist,
+    setUseWatchlist,
   } = useTradeFilters();
 
   // 2. Search Hook
@@ -113,6 +120,9 @@ export default function GlobalRunningTradePage() {
   // Logic from original file to load watchlist
   useEffect(() => {
     const loadWatchlist = async () => {
+      // User requested: "when not true. should not fetch watchlist on innitial"
+      if (!useWatchlist) return;
+
       if (!token || !user?.watchlist_id) return;
 
       try {
@@ -133,7 +143,84 @@ export default function GlobalRunningTradePage() {
 
     loadWatchlist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, user]); // Removed selectedSymbols dependency to avoid loop, checked inside
+  }, [token, user, useWatchlist]); // Added useWatchlist dependency
+
+  // Handle Watchlist Toggle Loop
+  useEffect(() => {
+    if (useWatchlist) {
+      if (watchlistSymbols.length > 0) {
+        const symbols = watchlistSymbols.map((s) => s.symbol);
+        setSelectedSymbols(symbols);
+        setPendingSelectedSymbols(symbols); // Sync pending state too
+      }
+    }
+  }, [useWatchlist, watchlistSymbols, setSelectedSymbols]);
+
+  const handleWatchlistToggle = (checked: boolean) => {
+    setUseWatchlist(checked);
+    if (!checked) {
+      setSelectedSymbols([]);
+      setPendingSelectedSymbols([]);
+    }
+  };
+
+  // Deferred Selection Logic
+  const [pendingSelectedSymbols, setPendingSelectedSymbols] =
+    useState<string[]>(selectedSymbols);
+  const [isMultiSelectOpen, setIsMultiSelectOpen] = useState(false);
+
+  // Sync pending with real when opening, AND when real changes externally (e.g. from watchlist toggle or initial load)
+  useEffect(() => {
+    if (!isMultiSelectOpen) {
+      setPendingSelectedSymbols(selectedSymbols);
+    }
+  }, [selectedSymbols, isMultiSelectOpen]);
+
+  const handleValuesChange = (newValues: string[]) => {
+    setPendingSelectedSymbols(newValues);
+  };
+
+  const handleOpenChange = (isOpen: boolean) => {
+    setIsMultiSelectOpen(isOpen);
+    if (!isOpen) {
+      // Closing: Apply changes
+      setSelectedSymbols(pendingSelectedSymbols);
+    }
+  };
+
+  // Combine options: always include selected items even if searching
+  // logic: if Not Searching -> Watchlist + (Selected items not in Watchlist)
+  // if Searching -> Search Results + (Selected items not in Results)
+  // BUT user said "all selected symbols should show on multiselect options", implying they want to see them to uncheck them.
+  // MultiSelect component handles "checking/unchecking" via value.
+  // We just need to ensure the ITEM is rendered.
+
+  const visibleOptions = useMemo(() => {
+    const baseOptions = searchKeyword ? searchResults : watchlistSymbols;
+    const baseSymbols = new Set(baseOptions.map((s) => s.symbol));
+
+    // Items that are selected but not in the base list
+    // We need to reconstruct their details. Since we only store symbol string,
+    // we might need to find them in watchlist or just make a dummy object.
+    // Ideally we find them in watchlist to get correct distinct name if possible.
+    const missingSelected = pendingSelectedSymbols.filter(
+      (s) => !baseSymbols.has(s)
+    );
+
+    const extraItems = missingSelected.map((symbol) => {
+      // Try to find in watchlist first
+      const found = watchlistSymbols.find((w) => w.symbol === symbol);
+      if (found) return found;
+      // Fallback dummy
+      return {
+        symbol,
+        name: symbol, // We might not have name if it came from a previous search
+        // Minimal required props for MultiSelectItem key/value
+      } as WatchlistSymbol;
+    });
+
+    return [...baseOptions, ...extraItems];
+  }, [searchKeyword, searchResults, watchlistSymbols, pendingSelectedSymbols]);
 
   // Sync session (Keep existing logic)
   useEffect(() => {
@@ -257,8 +344,9 @@ export default function GlobalRunningTradePage() {
                 onReset={resetFilters}
               />
               <MultiSelect
-                values={selectedSymbols}
-                onValuesChange={setSelectedSymbols}
+                values={pendingSelectedSymbols}
+                onValuesChange={handleValuesChange}
+                onOpenChange={handleOpenChange}
               >
                 <MultiSelectTrigger className="w-[200px]">
                   <MultiSelectValue
@@ -277,29 +365,40 @@ export default function GlobalRunningTradePage() {
                   }}
                   onValueChange={setSearchKeyword}
                 >
-                  {!searchKeyword &&
-                    watchlistSymbols.map((symbol) => (
-                      <MultiSelectItem
-                        key={symbol.symbol}
-                        value={symbol.symbol}
-                        badgeLabel={symbol.symbol}
-                      >
-                        {symbol.symbol}
-                      </MultiSelectItem>
-                    ))}
-
-                  {searchKeyword &&
-                    searchResults.map((symbol) => (
-                      <MultiSelectItem
-                        key={`search-${symbol.symbol}`}
-                        value={symbol.symbol}
-                        badgeLabel={symbol.symbol}
-                      >
-                        {symbol.symbol}
-                      </MultiSelectItem>
-                    ))}
+                  {visibleOptions.map((symbol) => (
+                    <MultiSelectItem
+                      key={symbol.symbol}
+                      value={symbol.symbol}
+                      badgeLabel={symbol.symbol}
+                    >
+                      {symbol.symbol}
+                    </MultiSelectItem>
+                  ))}
                 </MultiSelectContent>
               </MultiSelect>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="watchlist"
+                      checked={useWatchlist}
+                      onCheckedChange={(checked) =>
+                        handleWatchlistToggle(checked === true)
+                      }
+                    />
+                    <Label
+                      htmlFor="watchlist"
+                      className="flex cursor-pointer items-center"
+                    >
+                      <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                    </Label>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Use Watchlist</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
           </div>
 

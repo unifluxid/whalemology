@@ -8,6 +8,8 @@ interface ConfigState {
   setTheme: (theme: 'light' | 'dark') => void;
   selectedSymbols: string[];
   setSelectedSymbols: (symbols: string[]) => void;
+  useWatchlist: boolean;
+  setUseWatchlist: (use: boolean) => void;
 }
 
 export const useConfigStore = create<ConfigState>()(
@@ -19,6 +21,8 @@ export const useConfigStore = create<ConfigState>()(
       setTheme: (theme) => set({ theme }),
       selectedSymbols: [],
       setSelectedSymbols: (symbols) => set({ selectedSymbols: symbols }),
+      useWatchlist: false,
+      setUseWatchlist: (use) => set({ useWatchlist: use }),
     }),
     {
       name: 'whalemology-config',
