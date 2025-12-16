@@ -1,18 +1,13 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, useConfigStore } from '@/store';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
 import { AnomalyCard } from '@/components/whalemology/AnomalyCard';
 import { FilterPopover } from '@/components/whalemology/FilterPopover';
-import {
-  getRunningTrade,
-  RunningTradeFilters,
-  getWatchlistSymbols,
-  searchSymbols,
-} from '@/lib/stockbit-data';
-import { RunningTrade, WatchlistSymbol } from '@/lib/stockbit-types';
+import { getWatchlistSymbols } from '@/lib/stockbit-data';
+import { WatchlistSymbol } from '@/lib/stockbit-types';
 import { aggregateStockAnomalies } from '@/lib/trade-analysis';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
@@ -30,8 +25,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { useDebouncedCallback } from '@/hooks/use-debounce';
-
 import {
   Tooltip,
   TooltipContent,
@@ -48,170 +41,76 @@ import { Calendar as CalendarIcon, TrendingUp, DollarSign } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
+// Hooks
+import { useTradeFilters } from '@/hooks/use-trade-filters';
+import { useSymbolSearch } from '@/hooks/use-symbol-search';
+import { useRunningTrades } from '@/hooks/use-running-trades';
+
 export default function GlobalRunningTradePage() {
   const router = useRouter();
-  const { token } = useAuthStore();
+  const { token, user } = useAuthStore();
   const initialLoadRef = useRef(false);
 
-  // -- Local State for Settings (Refactored from Global Store) --
-  const { pollInterval, selectedSymbols, setSelectedSymbols } =
-    useConfigStore();
-  const [minConfidenceScore, setMinConfidenceScore] = useState(1);
-  const [minTotalValue, setMinTotalValue] = useState(0);
-  const [showOnlyWhales, setShowOnlyWhales] = useState(false);
-  const [actionTypeFilter, setActionTypeFilter] = useState<
-    'all' | 'buy' | 'sell'
-  >('all');
-  const [minimumLot, setMinimumLot] = useState(0);
-  const [marketBoard, setMarketBoard] = useState<
-    'all' | 'regular' | 'cash' | 'negotiation'
-  >('all');
-  const [priceRangeFrom, setPriceRangeFrom] = useState(0);
-  const [priceRangeTo, setPriceRangeTo] = useState(0);
-  const [timeRangeStart, setTimeRangeStart] = useState('');
-  const [timeRangeEnd, setTimeRangeEnd] = useState('');
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(
-    new Date()
-  );
-  const [sortBy, setSortBy] = useState<'time' | 'lot'>('time');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  // Config from store
+  const { pollInterval } = useConfigStore();
 
-  const [data, setData] = useState<RunningTrade | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  // Symbol multi-select state
-  const { user } = useAuthStore();
-  const [watchlistSymbols, setWatchlistSymbols] = useState<WatchlistSymbol[]>(
-    []
-  );
-  const [searchResults, setSearchResults] = useState<WatchlistSymbol[]>([]);
-  const [searchKeyword, setSearchKeyword] = useState('');
-
-  const resetFilters = useCallback(() => {
-    setMinConfidenceScore(1);
-    setMinTotalValue(0);
-    setShowOnlyWhales(false);
-    setActionTypeFilter('all');
-    setMinimumLot(0);
-    setMarketBoard('all');
-    setPriceRangeFrom(0);
-    setPriceRangeTo(0);
-    setTimeRangeStart('');
-    setTimeRangeEnd('');
-    setSelectedDate(new Date());
-    setSortBy('time');
-    setSortOrder('desc');
-  }, []);
-
-  // Build API filters from advanced filter settings
-  const buildApiFilters = useCallback((): RunningTradeFilters => {
-    const actionTypeMap = {
-      all: 'RUNNING_TRADE_ACTION_TYPE_ALL',
-      buy: 'RUNNING_TRADE_ACTION_TYPE_BUY',
-      sell: 'RUNNING_TRADE_ACTION_TYPE_SELL',
-    } as const;
-
-    const marketBoardMap = {
-      all: 'BOARD_TYPE_ALL',
-      regular: 'BOARD_TYPE_REGULAR',
-      cash: 'BOARD_TYPE_CASH',
-      negotiation: 'BOARD_TYPE_NEGOTIATION',
-    } as const;
-
-    const orderByMap = {
-      time: 'RUNNING_TRADE_ORDER_BY_TIME',
-      lot: 'RUNNING_TRADE_ORDER_BY_LOT',
-    } as const;
-
-    return {
-      action_type: actionTypeMap[actionTypeFilter],
-      minimum_lot: minimumLot > 0 ? minimumLot : undefined,
-      market_board: marketBoardMap[marketBoard],
-      price_range_from: priceRangeFrom > 0 ? priceRangeFrom : undefined,
-      price_range_to: priceRangeTo > 0 ? priceRangeTo : undefined,
-      time_range_start: timeRangeStart || undefined,
-      time_range_end: timeRangeEnd || undefined,
-      date:
-        selectedDate instanceof Date
-          ? selectedDate.toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0],
-      order_by: orderByMap[sortBy],
-      sort: sortOrder,
-      symbols: selectedSymbols.length > 0 ? selectedSymbols : undefined,
-    };
-  }, [
+  // 1. Filter Hook
+  const {
+    // State
     actionTypeFilter,
-    minimumLot,
+    setActionTypeFilter,
     marketBoard,
+    setMarketBoard,
     priceRangeFrom,
+    setPriceRangeFrom,
     priceRangeTo,
+    setPriceRangeTo,
+    minimumLot,
+    setMinimumLot,
     timeRangeStart,
+    setTimeRangeStart,
     timeRangeEnd,
+    setTimeRangeEnd,
     selectedDate,
+    setSelectedDate,
     sortBy,
     sortOrder,
     selectedSymbols,
-  ]);
+    setSelectedSymbols,
+    minConfidenceScore,
+    setMinConfidenceScore,
+    minTotalValue,
+    setMinTotalValue,
+    showOnlyWhales,
+    setShowOnlyWhales,
+    // Actions
+    resetFilters,
+    handleSortChange,
+    // Computed
+    apiFilters,
+  } = useTradeFilters();
 
-  // Fetch trades with filters
-  const fetchTrades = useCallback(
-    async (activeToken: string, tradeNumber?: string, dateOverride?: Date) => {
-      const filters = buildApiFilters();
-      if (dateOverride) {
-        filters.date = dateOverride.toISOString().split('T')[0];
-      }
-      return await getRunningTrade('', activeToken, tradeNumber, filters);
-    },
-    [buildApiFilters]
+  // 2. Search Hook
+  const { searchKeyword, setSearchKeyword, searchResults } =
+    useSymbolSearch(token);
+
+  // 3. Trade Data Hook
+  const { data, loading, loadingMore, handleLoadMore } = useRunningTrades({
+    token,
+    filters: apiFilters,
+    pollInterval,
+  });
+
+  // Load watchlist symbols on mount (keep this logic here as it interacts with auth & selected symbols)
+  // We could extract another hook `useWatchlist` but this is acceptable for now.
+  const [watchlistSymbols, setWatchlistSymbols] = useState<WatchlistSymbol[]>(
+    []
   );
 
-  // Compute anomalies from ALL trade data (not filtered by advanced filters)
-  // Only apply quick filters: confidence, value, whales
-  const anomalies = useMemo(() => {
-    if (!data) return [];
-    const allAnomalies = aggregateStockAnomalies(data.data.running_trade);
+  // NOTE: I need to import useState for this local state
+  // Let's add useState to imports
 
-    // Apply only anomaly-level quick filters
-    return allAnomalies.filter((anomaly) => {
-      if (anomaly.confidenceScore < minConfidenceScore) return false;
-      if (anomaly.totalValue < minTotalValue) return false;
-      if (showOnlyWhales && anomaly.whaleCount === 0) return false;
-      return true;
-    });
-  }, [data, minConfidenceScore, minTotalValue, showOnlyWhales]);
-
-  // Handle advanced filter apply
-  const handleFilterApply = useCallback(async () => {
-    if (!token) return;
-
-    try {
-      setLoading(true);
-      const trades = await fetchTrades(token);
-      setData(trades);
-    } catch (error) {
-      console.error('Failed to apply filters', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, fetchTrades]);
-
-  // Handle advanced filter reset
-  const handleFilterReset = useCallback(async () => {
-    if (!token) return;
-
-    try {
-      setLoading(true);
-      const trades = await fetchTrades(token);
-      setData(trades);
-    } catch (error) {
-      console.error('Failed to reset filters', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, fetchTrades]);
-
-  // Load watchlist symbols on mount
+  // Logic from original file to load watchlist
   useEffect(() => {
     const loadWatchlist = async () => {
       if (!token || !user?.watchlist_id) return;
@@ -222,7 +121,9 @@ export default function GlobalRunningTradePage() {
 
         // If no symbols are selected yet, pre-load all watchlist symbols
         if (selectedSymbols.length === 0) {
-          const symbols = response.data.result.map((s) => s.symbol);
+          const symbols = response.data.result.map(
+            (s: WatchlistSymbol) => s.symbol
+          );
           setSelectedSymbols(symbols);
         }
       } catch (error) {
@@ -232,68 +133,10 @@ export default function GlobalRunningTradePage() {
 
     loadWatchlist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, user]);
+  }, [token, user]); // Removed selectedSymbols dependency to avoid loop, checked inside
 
-  // Refetch trades when selected symbols change
+  // Sync session (Keep existing logic)
   useEffect(() => {
-    handleFilterApply();
-  }, [selectedSymbols, handleFilterApply]);
-
-  const debouncedSetSearchKeyword = useDebouncedCallback(setSearchKeyword, 300);
-
-  // Handle symbol search
-  useEffect(() => {
-    if (!searchKeyword || !token) {
-      setSearchResults([]);
-      return;
-    }
-
-    const search = async () => {
-      try {
-        const response = await searchSymbols(searchKeyword, token);
-        // Convert search results to watchlist symbol format
-        const symbols: WatchlistSymbol[] = response.data.company
-          .filter((company) => company.type === 'Saham')
-          .map((company) => ({
-            symbol: company.name,
-            symbol2: company.symbol_2,
-            symbol3: company.symbol_3,
-            country: company.country,
-            exchange: company.exchange,
-            status: parseInt(company.status),
-            id: company.id,
-            name: company.desc,
-            sequence_no: 0,
-            icon_url: company.icon_url,
-            last: '',
-            change: '',
-            percent: '',
-            previous: '',
-            tradeable: company.is_tradeable,
-            type: company.type,
-            orderbook: { bid: '', offer: '' },
-            prices: [],
-            column: [],
-            notations: [],
-            uma: false,
-            corp_action: { active: false, icon: '', text: '' },
-            formatted_price: '',
-            notation: [],
-            volume: '',
-            extra_attributes: null,
-          }));
-        setSearchResults(symbols);
-      } catch (error) {
-        console.error('Failed to search symbols', error);
-      }
-    };
-
-    search();
-  }, [searchKeyword, token]);
-
-  // Sync session
-  useEffect(() => {
-    // Prevent double-fetch in React Strict Mode
     if (initialLoadRef.current) return;
     initialLoadRef.current = true;
 
@@ -304,13 +147,10 @@ export default function GlobalRunningTradePage() {
         if (res.ok) {
           const data = await res.json();
           if (data.token) {
-            // Only update token, preserve existing user data
             const currentUser = useAuthStore.getState().user;
             if (currentUser) {
-              // User already exists, just update token
               useAuthStore.getState().setAuth(data.token, currentUser);
             } else {
-              // No user data yet, use what we got (minimal)
               useAuthStore.getState().setAuth(data.token, data.user);
             }
             return data.token;
@@ -323,185 +163,29 @@ export default function GlobalRunningTradePage() {
     };
 
     const init = async () => {
-      // Ensure date is reset to today on initial load
-      const today = new Date();
-      setSelectedDate(today);
-
       const activeToken = await syncSession();
       if (!activeToken) {
         router.push('/login');
-        return;
-      }
-
-      try {
-        setLoading(true);
-        const trades = await fetchTrades(activeToken, undefined, today);
-        setData(trades);
-      } catch (error) {
-        console.error('Failed to load global trades', error);
-      } finally {
-        setLoading(false);
       }
     };
 
     init();
-  }, [token, router, fetchTrades]);
+  }, [token, router]);
 
-  // Infinite Scroll Load More
-  const handleLoadMore = async () => {
-    if (loadingMore || !data || !token) return;
+  // Compute anomalies (Client-side filtering)
+  const anomalies = useMemo(() => {
+    if (!data) return [];
+    const allAnomalies = aggregateStockAnomalies(data.data.running_trade);
 
-    const trades = data.data.running_trade;
-    if (trades.length === 0) return;
+    return allAnomalies.filter((anomaly) => {
+      if (anomaly.confidenceScore < minConfidenceScore) return false;
+      if (anomaly.totalValue < minTotalValue) return false;
+      if (showOnlyWhales && anomaly.whaleCount === 0) return false;
+      return true;
+    });
+  }, [data, minConfidenceScore, minTotalValue, showOnlyWhales]);
 
-    const lastTrade = trades[trades.length - 1];
-    setLoadingMore(true);
-    try {
-      const olderTrades = await fetchTrades(token, lastTrade.trade_number);
-
-      if (olderTrades.data.running_trade.length > 0) {
-        setData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            data: {
-              ...prev.data,
-              running_trade: [
-                ...prev.data.running_trade,
-                ...olderTrades.data.running_trade,
-              ],
-            },
-          };
-        });
-      }
-    } catch (e) {
-      console.error('Failed to load more global trades', e);
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  // Polling
-  useEffect(() => {
-    if (!token) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const newTradesData = await fetchTrades(token);
-
-        setData((prev) => {
-          if (!prev) return newTradesData;
-
-          const currentTrades = prev.data.running_trade;
-          const newItemList = newTradesData.data.running_trade;
-
-          const distinctNewItems = newItemList.filter(
-            (newItem) =>
-              !currentTrades.some(
-                (existing) => existing.trade_number === newItem.trade_number
-              )
-          );
-
-          if (distinctNewItems.length === 0) return prev;
-
-          return {
-            ...prev,
-            data: {
-              ...prev.data,
-              running_trade: [...distinctNewItems, ...currentTrades],
-            },
-          };
-        });
-      } catch (e) {
-        console.error('Polling error', e);
-      }
-    }, pollInterval);
-
-    return () => clearInterval(interval);
-  }, [token, pollInterval, fetchTrades]);
-
-  // Handle date change - fetch immediately (outside filter applies immediately)
-  const handleDateChange = useCallback(
-    async (date: Date | undefined) => {
-      // NOTE: We don't guard against date being undefined here to allow clearing,
-      // but UI logic suggests date is usually required or defaults to today.
-      // If date is undefined, we might just return.
-      if (!date || !token) return;
-
-      setSelectedDate(date);
-
-      try {
-        setLoading(true);
-        // We pass the new date explicitly because state update might be async/batched
-        // although we also update state above.
-        // Actually fetchTrades uses selectedDate from state closure or arguments.
-        // It's safer to rely on the effect or pass it explicitly if we want immediate fetch.
-        // Here we rely on the state update being reflected in next render or pass it if fetchTrades accepts override.
-        // fetchTrades accepts dateOverride.
-        const trades = await fetchTrades(token, undefined, date);
-        setData(trades);
-      } catch (error) {
-        console.error('Failed to fetch trades with new date', error);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [token, fetchTrades]
-  );
-
-  // Handle sort change - toggle order if same column, fetch immediately
-  const handleSortChange = useCallback(
-    async (newSortBy: 'time' | 'lot') => {
-      if (!token) return;
-
-      // If clicking same column, toggle order; if different column, use desc
-      let newSortOrder: 'asc' | 'desc' = 'desc';
-      if (newSortBy === sortBy) {
-        newSortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
-      }
-
-      setSortBy(newSortBy);
-      setSortOrder(newSortOrder);
-
-      // We need to wait for state to update for buildApiFilters to see new sort
-      // OR we can pass overrides. But fetchTrades doesn't accept sort overrides easily without refactor.
-      // For now, let's assume valid state in next tick or duplicate logic.
-      // To ensure correct params immediately:
-      // We can't easily pass sort override to fetchTrades without changing its signature.
-      // So we will just fire the effect or call it.
-      // Actually, since buildApiFilters depends on state, calling fetchTrades immediately here
-      // might use OLD state due to closure.
-      // FIX: It's better to use a dedicated useEffect for sort changes OR refactor fetchTrades to accept filters object directly.
-      // The current pattern in `handleDateChange` uses an override.
-      // Let's refactor fetchTrades slightly? No, let's just cheat and wait or use a hack?
-      // Better approach: Update state, and let a useEffect trigger fetch?
-      // The original code fetched immediately.
-      // To fix closure stale state issue without changing fetchTrades signature too much:
-      // We'll update the state, but we can't await state update.
-      // We will perform the fetch manually constructing filters with new sort values here.
-
-      try {
-        setLoading(true);
-        const filters = buildApiFilters();
-        // Override sort in filters
-        const orderByMap = {
-          time: 'RUNNING_TRADE_ORDER_BY_TIME',
-          lot: 'RUNNING_TRADE_ORDER_BY_LOT',
-        } as const;
-        filters.order_by = orderByMap[newSortBy];
-        filters.sort = newSortOrder;
-
-        const trades = await getRunningTrade('', token, undefined, filters);
-        setData(trades);
-      } catch (error) {
-        console.error('Failed to fetch trades with new sort', error);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [token, sortBy, sortOrder, buildApiFilters]
-  );
-
+  // Title effect
   useEffect(() => {
     document.title = 'Global Running Trade | Whalemology';
   }, []);
@@ -517,12 +201,12 @@ export default function GlobalRunningTradePage() {
     );
   }
 
+  // The render part is mostly identical, just using values from hooks
   return (
     <div className="text-foreground flex h-full flex-col p-4 font-sans">
       <div className="mx-auto flex h-full w-full flex-col space-y-4">
-        {/* Filters Section - Left and Right */}
+        {/* Filters Section */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-7">
-          {/* Left: Advanced Filters (Trade Feed) - 3 columns */}
           <div className="md:col-span-3">
             <div className="flex items-center gap-3">
               <Popover>
@@ -544,7 +228,7 @@ export default function GlobalRunningTradePage() {
                   <Calendar
                     mode="single"
                     selected={selectedDate}
-                    onSelect={handleDateChange}
+                    onSelect={setSelectedDate}
                     initialFocus
                   />
                 </PopoverContent>
@@ -567,10 +251,11 @@ export default function GlobalRunningTradePage() {
                 setTimeRangeEnd={setTimeRangeEnd}
                 setSelectedDate={setSelectedDate}
                 resetFilters={resetFilters}
-                onApply={handleFilterApply}
-                onReset={handleFilterReset}
+                onApply={() => {
+                  /* No-op: Hook handles refetch automatically on change */
+                }}
+                onReset={resetFilters}
               />
-              {/* Multi select */}
               <MultiSelect
                 values={selectedSymbols}
                 onValuesChange={setSelectedSymbols}
@@ -590,9 +275,8 @@ export default function GlobalRunningTradePage() {
                     placeholder: 'Search symbols...',
                     emptyMessage: 'No symbols found.',
                   }}
-                  onValueChange={debouncedSetSearchKeyword}
+                  onValueChange={setSearchKeyword}
                 >
-                  {/* Show watchlist symbols ONLY when not searching */}
                   {!searchKeyword &&
                     watchlistSymbols.map((symbol) => (
                       <MultiSelectItem
@@ -604,7 +288,6 @@ export default function GlobalRunningTradePage() {
                       </MultiSelectItem>
                     ))}
 
-                  {/* Show search results when searching */}
                   {searchKeyword &&
                     searchResults.map((symbol) => (
                       <MultiSelectItem
@@ -620,7 +303,6 @@ export default function GlobalRunningTradePage() {
             </div>
           </div>
 
-          {/* Right: Quick Filters (Anomaly Cards) - 4 columns */}
           <div className="md:col-span-4">
             <div className="flex flex-wrap items-center gap-3">
               <Tooltip>
@@ -718,9 +400,8 @@ export default function GlobalRunningTradePage() {
           </div>
         </div>
 
-        {/* Content - Three Column Grid */}
+        {/* Content */}
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-7">
-          {/* Left: Trade Feed - 3 columns */}
           <div className="h-full min-h-0 md:col-span-3">
             <div className="sticky top-6 h-[calc(100vh-10rem)]">
               <TradeFeed
@@ -734,7 +415,6 @@ export default function GlobalRunningTradePage() {
             </div>
           </div>
 
-          {/* Right: Anomaly Cards - 4 columns (2 columns each side by side) */}
           <div className="md:col-span-4">
             <div className="sticky top-6 h-[calc(100vh-10rem)]">
               <AnomalyCard anomalies={anomalies} />
