@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { TradeItem } from './stockbit-types';
 // import { useTradeStore } from '@/store/trade-store'; // REMOVED
 
@@ -53,6 +54,7 @@ interface EnrichedTrade extends TradeItem {
   value: number; // priceNum * lotNum * 100
   index: number;
   timeSeconds: number; // Seconds since start of day (0-86399) or similar
+  changeNum: number; // Percentage change as number (e.g. 1.5 for +1.5%)
 }
 
 // Thresholds & parameters
@@ -78,61 +80,70 @@ export function enrichTrade(trade: TradeItem): TradeItem {
   if (
     trade.priceNum !== undefined &&
     trade.lotNum !== undefined &&
-    trade.value !== undefined
+    trade.value !== undefined &&
+    (trade as any).changeNum !== undefined
   ) {
     return trade;
   }
   const lotNum = parseNumberFromString(trade.lot);
   const priceNum = parseNumberFromString(trade.price);
-  const value = priceNum * lotNum * 100; // 1 lot = 100 saham (IDX)
-  return { ...trade, lotNum, priceNum, value };
+  const value = priceNum * lotNum * 100;
+  // Parse change string "+1.5%" or "-0.5%" to number
+  const changeClean = trade.change.replace('%', '').replace('+', '');
+  const changeNum = parseFloat(changeClean) || 0;
+
+  return { ...trade, lotNum, priceNum, value, changeNum } as TradeItem & {
+    changeNum: number;
+  };
 }
 
 // Calculate confidence score (1-6 Likert scale)
 export function calculateConfidenceScore(anomaly: StockAnomaly): number {
   let score = 0;
 
-  // Factor 1: Whale events presence (0-2 points)
-  if (anomaly.whaleCount >= 3) score += 2;
-  else if (anomaly.whaleCount >= 1) score += 1;
+  // Factor 1: Whale Intensity (Combined Count & Value influence) (0-3 points)
+  // We avoid double counting simply adding Count + Total Value.
+  // Instead, we score based on "Whale Presence Quality".
+  if (anomaly.whaleCount >= 3) {
+    score += 2;
+    // Bonus if they are HUGE whales average
+    const avgWhaleValue =
+      anomaly.whaleCount > 0 ? anomaly.totalValue / anomaly.whaleCount : 0;
+    if (avgWhaleValue > 200_000_000) score += 1; // High quality whales
+  } else if (anomaly.whaleCount >= 1) {
+    score += 1;
+    if (anomaly.totalValue >= 500_000_000) score += 0.5; // Single but huge
+  }
 
-  // Factor 2: Split order events presence with value weighting (0-2 points)
-  // REVISI: Split order sekarang memperhitungkan total value
+  // Factor 2: Split Order Intensity (0-2 points)
+  // Split orders indicate intent to hide.
   if (anomaly.totalSplitValue >= 500_000_000) {
-    score += 2; // Split value >= 500M = strong anomaly
+    score += 2; // Strong hiding intent + High value
   } else if (anomaly.totalSplitValue >= 200_000_000) {
-    score += 1.5; // Split value >= 200M = medium-strong
+    score += 1.5;
   } else if (
     anomaly.splitOrderCount >= 2 &&
     anomaly.totalSplitValue >= 100_000_000
   ) {
-    score += 1; // Multiple splits >= 100M = medium
+    score += 1;
   } else if (
     anomaly.splitOrderCount >= 1 &&
     anomaly.totalSplitValue >= 50_000_000
   ) {
-    score += 0.5; // Single split >= 50M = low signal
+    score += 0.5;
   }
-  // Split < 50M total = tidak dapat poin (filtered out)
 
-  // Factor 3: Total value threshold (0-2 points)
-  if (anomaly.totalValue >= 500_000_000)
-    score += 2; // >= 500M
-  else if (anomaly.totalValue >= 200_000_000) score += 1; // >= 200M
-
-  // Factor 4: Broker concentration (0-1 point) – lihat dominasi broker terbesar
+  // Factor 3: Broker Concentration (0-1 point) – High concentration = higher confidence it's a specific actor
   if (anomaly.topBrokers.length > 0) {
     const totalEvents = anomaly.topBrokers.reduce((sum, b) => sum + b.count, 0);
     if (totalEvents > 0) {
       const maxShare = anomaly.topBrokers[0].count / totalEvents;
       if (maxShare >= 0.5) {
-        score += 1; // Satu broker dominan di anomali
+        score += 1; // Dominant broker
       }
     }
   }
 
-  // Ensure score is between 1-6, dengan baseline 1
-  // Note: Max bisa > 6 dengan formula baru, jadi cap di 6
   return Math.min(Math.max(Math.round(score + 1), 1), 6);
 }
 
@@ -187,6 +198,7 @@ export function analyzeTrades(trades: TradeItem[]): {
       lotNum: t.lotNum!,
       priceNum: t.priceNum!,
       value: t.value!,
+      changeNum: (t as any).changeNum ?? 0,
       index: i,
       timeSeconds,
     };
@@ -230,7 +242,8 @@ export function analyzeTrades(trades: TradeItem[]): {
           ? (trade.buyer ?? 'UNKNOWN')
           : (trade.seller ?? 'UNKNOWN');
       const whaleKey = `${side}|${brokerRaw}`;
-      const splitKey = `${side}|${brokerRaw}|${trade.priceNum}`;
+      // REVISI LOGIC: Hapus price constraint agar bisa detect algo "sweeping" (beli di berbagai harga sekaligus)
+      const splitKey = `${side}|${brokerRaw}`;
 
       // Whale grouping
       const currentWhaleValue = whaleGroupValueMap.get(whaleKey) ?? 0;
@@ -353,25 +366,39 @@ export function analyzeTrades(trades: TradeItem[]): {
     if (trade.action === 'buy') {
       accumulationScore += tradeScore;
     } else {
-      distributionScore += tradeScore;
+      // Logic Revisi: Passive Accumulation / Absorption check
+      // Jika action sell (HAKI) tapi harga naik/hijau (change > 0),
+      // kemungkinan itu adalah Absorption (Limit Buy Whales dimakan retail panic sell).
+      // Kita split score 50:50 atau 30:70, jangan full distribution.
+      // Simplify: Jika change > 0, anggap 50% absorpsi.
+      const changeNum = (trade as any).changeNum ?? 0;
+
+      if (changeNum > 0) {
+        accumulationScore += tradeScore * 0.5; // Absorbed
+        distributionScore += tradeScore * 0.5; // Still selling pressure
+      } else {
+        distributionScore += tradeScore;
+      }
     }
   }
 
   // 3. Bangun analyzedTrades dengan pattern per trade
   const analyzed = enrichedTrades.map<AnalyzedTrade>((trade) => {
-    const { value, index, ...originalTrade } = trade;
+    const { index, ...tradeData } = trade; // Keep value, lotNum, etc.
 
     const isWhale = isWhaleFlags[index];
     const isSplitOrder = isSplitFlags[index];
 
     let pattern: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' = 'NEUTRAL';
 
+    // Use tradeData.value which is now preserved
     const isSignificant =
-      (isWhale || isSplitOrder) && value >= MIN_SIGNIFICANT_VALUE;
+      (isWhale || isSplitOrder) &&
+      (tradeData.value ?? 0) >= MIN_SIGNIFICANT_VALUE;
 
     if (isSignificant) {
       // Pattern per trade hanya tergantung side, scoring-nya sudah di-aggregate di atas
-      if (trade.action === 'buy') {
+      if (tradeData.action === 'buy') {
         pattern = 'ACCUMULATION';
       } else {
         pattern = 'DISTRIBUTION';
@@ -379,11 +406,11 @@ export function analyzeTrades(trades: TradeItem[]): {
     }
 
     return {
-      ...originalTrade,
+      ...tradeData,
       analysis: {
         isWhale,
         isSplitOrder,
-        sameTimeCount: timeGroups.get(trade.time)?.length ?? 0,
+        sameTimeCount: timeGroups.get(tradeData.time)?.length ?? 0,
         pattern,
       },
     };
