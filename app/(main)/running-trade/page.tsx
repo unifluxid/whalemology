@@ -261,7 +261,15 @@ export default function GlobalRunningTradePage() {
 
   // Compute anomalies (Client-side filtering)
   const anomalies = useMemo(() => {
+    // If data is null, the store might be empty or loading.
+    // aggregateStockAnomalies() will pull from store directly.
+    // However, we rely on 'data' change to re-trigger memo.
+    // Ideally we should subscribe to store changes if 'data' wasn't passed as prop/hook result.
+    // But 'data' comes from useRunningTrades hook which subscribes to store.
+    // So 'data' changing means store changed.
     if (!data) return [];
+
+    // We pass trades explicitly now
     const allAnomalies = aggregateStockAnomalies(data.data.running_trade);
 
     return allAnomalies.filter((anomaly) => {
@@ -491,7 +499,11 @@ export default function GlobalRunningTradePage() {
                 <span className="font-semibold">
                   {data?.data.running_trade.length || 0}
                 </span>{' '}
-                trades •{' '}
+                live trades •{' '}
+                <span className="font-semibold">
+                  {data?.data.running_trade.length || 0} / 10,000
+                </span>{' '}
+                saved •{' '}
                 <span className="font-semibold">{anomalies.length}</span>{' '}
                 anomalies
               </div>

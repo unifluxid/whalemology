@@ -1,0 +1,9 @@
+export const ANALYSIS_CONFIG = {
+  WHALE_SINGLE_TRADE_THRESHOLD: 100_000_000, // 100 juta
+  WHALE_GROUPED_TRADE_THRESHOLD: 50_000_000, // 50 juta
+  MIN_SIGNIFICANT_VALUE: 5_000_000, // Min value 5 juta
+  SPLIT_ORDER_THRESHOLD: 5, // Min trades per second
+  MIN_SPLIT_TOTAL_VALUE: 50_000_000, // 50 juta
+  TIME_DECAY_HALF_LIFE: 30, // Minutes
+  MIN_TOTAL_SCORE: 1_000_000, // Score threshold
+};

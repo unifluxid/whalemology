@@ -1,4 +1,5 @@
 import { TradeItem } from './stockbit-types';
+// import { useTradeStore } from '@/store/trade-store'; // REMOVED
 
 export interface AnalyzedTrade extends TradeItem {
   analysis: {
@@ -51,55 +52,40 @@ interface EnrichedTrade extends TradeItem {
   priceNum: number;
   value: number; // priceNum * lotNum * 100
   index: number;
+  timeSeconds: number; // Seconds since start of day (0-86399) or similar
 }
 
 // Thresholds & parameters
-const WHALE_SINGLE_TRADE_THRESHOLD = 100_000_000; // 100 juta
-const WHALE_GROUPED_TRADE_THRESHOLD = 50_000_000; // 50 juta
-const MIN_SIGNIFICANT_VALUE = 5_000_000; // Min nilai trade 5 juta untuk dianggap signifikan
-const SPLIT_ORDER_THRESHOLD = 5; // Min trade dalam 1 detik, same side+broker+price
-const MIN_SPLIT_TOTAL_VALUE = 50_000_000; // 50 juta - minimum total value untuk split order dianggap anomali
-const TIME_DECAY_HALF_LIFE = 30; // Menit untuk time-decay (half life)
-const MIN_TOTAL_SCORE = 1_000_000; // ~ kira-kira setara total value ~200M+ (kasar)
+import { ANALYSIS_CONFIG } from './analysis-config';
 
-function parseNumberFromString(input: string): number {
+const {
+  WHALE_SINGLE_TRADE_THRESHOLD,
+  WHALE_GROUPED_TRADE_THRESHOLD,
+  MIN_SIGNIFICANT_VALUE,
+  SPLIT_ORDER_THRESHOLD,
+  MIN_SPLIT_TOTAL_VALUE,
+  TIME_DECAY_HALF_LIFE,
+  MIN_TOTAL_SCORE,
+} = ANALYSIS_CONFIG;
+
+export function parseNumberFromString(input: string): number {
   const cleaned = input.replace(/,/g, '');
   const parsed = parseInt(cleaned, 10);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function parseTimeToDate(time: string, referenceDate?: Date): Date {
-  const [hStr, mStr = '0', sStr = '0'] = time.split(':');
-  const hours = Number(hStr) || 0;
-  const minutes = Number(mStr) || 0;
-  const seconds = Number(sStr) || 0;
-  const base = referenceDate ? new Date(referenceDate) : new Date();
-  base.setHours(hours, minutes, seconds, 0);
-  return base;
-}
-
-// Pakai waktu trade terakhir di hari itu sebagai "now" (reference) untuk decay,
-// supaya konsisten untuk data harian, tidak tergantung jam eksekusi.
-function computeReferenceTime(trades: TradeItem[]): Date {
-  let maxSeconds = 0;
-
-  for (const trade of trades) {
-    const [hStr, mStr = '0', sStr = '0'] = trade.time.split(':');
-    const h = Number(hStr) || 0;
-    const m = Number(mStr) || 0;
-    const s = Number(sStr) || 0;
-    const totalSeconds = h * 3600 + m * 60 + s;
-    if (totalSeconds > maxSeconds) {
-      maxSeconds = totalSeconds;
-    }
+export function enrichTrade(trade: TradeItem): TradeItem {
+  if (
+    trade.priceNum !== undefined &&
+    trade.lotNum !== undefined &&
+    trade.value !== undefined
+  ) {
+    return trade;
   }
-
-  const ref = new Date();
-  const refHours = Math.floor(maxSeconds / 3600);
-  const refMinutes = Math.floor((maxSeconds % 3600) / 60);
-  const refSeconds = maxSeconds % 60;
-  ref.setHours(refHours, refMinutes, refSeconds, 0);
-  return ref;
+  const lotNum = parseNumberFromString(trade.lot);
+  const priceNum = parseNumberFromString(trade.price);
+  const value = priceNum * lotNum * 100; // 1 lot = 100 saham (IDX)
+  return { ...trade, lotNum, priceNum, value };
 }
 
 // Calculate confidence score (1-6 Likert scale)
@@ -154,9 +140,10 @@ export function analyzeTrades(trades: TradeItem[]): {
   analyzedTrades: AnalyzedTrade[];
   summary: TradeAnalysisSummary;
 } {
+  const sourceTrades = trades;
   const analyzedTrades: AnalyzedTrade[] = [];
 
-  if (trades.length === 0) {
+  if (!sourceTrades || sourceTrades.length === 0) {
     return {
       analyzedTrades,
       summary: {
@@ -172,33 +159,48 @@ export function analyzeTrades(trades: TradeItem[]): {
     };
   }
 
-  // Normalisasi numeric dulu
-  const enrichedTrades: EnrichedTrade[] = trades.map((trade, index) => {
-    const lotNum = parseNumberFromString(trade.lot);
-    const priceNum = parseNumberFromString(trade.price);
-    const value = priceNum * lotNum * 100; // 1 lot = 100 saham (IDX)
-
-    return {
-      ...trade,
-      lotNum,
-      priceNum,
-      value,
-      index,
-    };
-  });
-
+  // Phase 1: Enrich, Calculate Total Volume, Group by Time, and Find Max Time in one pass
   let totalVolume = 0;
-  for (const t of enrichedTrades) {
-    totalVolume += t.lotNum;
-  }
-
-  // Group by exact timestamp (HH:MM:SS) – daily data only, jadi aman
+  let maxSeconds = 0;
   const timeGroups = new Map<string, EnrichedTrade[]>();
-  for (const trade of enrichedTrades) {
-    if (!timeGroups.has(trade.time)) {
-      timeGroups.set(trade.time, []);
+  const enrichedTrades: EnrichedTrade[] = new Array(sourceTrades.length);
+
+  for (let i = 0; i < sourceTrades.length; i++) {
+    const original = sourceTrades[i];
+    // Use helper to ensure enriched (should be fast if already done in store)
+    const t = enrichTrade(original);
+
+    // Calculate timeSeconds for optimization
+    const parts = t.time.split(':');
+    const h = Number(parts[0]) || 0;
+    const m = Number(parts[1]) || 0;
+    const s = Number(parts[2]) || 0;
+    const timeSeconds = h * 3600 + m * 60 + s;
+
+    if (timeSeconds > maxSeconds) {
+      maxSeconds = timeSeconds;
     }
-    timeGroups.get(trade.time)!.push(trade);
+
+    // Cast to EnrichedTrade (we know it has num fields now) and add index
+    const enriched: EnrichedTrade = {
+      ...t,
+      lotNum: t.lotNum!,
+      priceNum: t.priceNum!,
+      value: t.value!,
+      index: i,
+      timeSeconds,
+    };
+
+    enrichedTrades[i] = enriched;
+    totalVolume += enriched.lotNum;
+
+    // Grouping
+    const group = timeGroups.get(enriched.time);
+    if (group) {
+      group.push(enriched);
+    } else {
+      timeGroups.set(enriched.time, [enriched]);
+    }
   }
 
   // Flags per trade index
@@ -319,13 +321,16 @@ export function analyzeTrades(trades: TradeItem[]): {
     splitIntensityScore += value * intensityWeight;
   }
 
-  // 2. Scoring ACCUMULATION vs DISTRIBUTION dengan time-decay
-  const referenceTime = computeReferenceTime(trades);
+  // 2. Scoring ACCUMULATION vs DISTRIBUTION with time-decay
+  // We don't need Date objects anymore, just relative seconds diff
+  // decay = exp( - (diffMinutes * LN2) / halfLife )
+  // diffMinutes = (maxSeconds - tradeSeconds) / 60
 
   let accumulationScore = 0;
   let distributionScore = 0;
 
-  for (const trade of enrichedTrades) {
+  for (let i = 0; i < enrichedTrades.length; i++) {
+    const trade = enrichedTrades[i];
     const isWhale = isWhaleFlags[trade.index];
     const isSplitOrder = isSplitFlags[trade.index];
 
@@ -336,9 +341,7 @@ export function analyzeTrades(trades: TradeItem[]): {
       continue;
     }
 
-    const tradeDate = parseTimeToDate(trade.time, referenceTime);
-    const ageInMinutes =
-      (referenceTime.getTime() - tradeDate.getTime()) / 60000;
+    const ageInMinutes = (maxSeconds - trade.timeSeconds) / 60;
 
     // Exponential decay: trade yang lebih dekat ke "akhir hari" bobotnya lebih besar
     const timeWeight = Math.exp(
@@ -425,10 +428,11 @@ export function aggregateStockAnomalies(
 ): StockAnomaly[] {
   const { hideBrokerNames = false } = options;
 
+  const sourceTrades = trades;
   const stocksMap = new Map<string, TradeItem[]>();
 
   // Group trades by symbol
-  trades.forEach((trade) => {
+  sourceTrades.forEach((trade) => {
     if (!stocksMap.has(trade.code)) {
       stocksMap.set(trade.code, []);
     }
@@ -460,26 +464,26 @@ export function aggregateStockAnomalies(
       );
     }
 
-    // Calculate averages dan total value
-    const lots = stockTrades.map((t) => parseNumberFromString(t.lot));
-    const prices = stockTrades.map((t) => parseNumberFromString(t.price));
+    // Calculate averages dan total value using enriched data from analyzedTrades
+    let totalValue = 0;
+    let totalPriceVolume = 0;
 
-    const totalLots = lots.reduce((a, b) => a + b, 0);
+    for (const t of analyzedTrades) {
+      // These are guaranteed to be present from analyzeTrades
+      const lot = t.lotNum ?? 0;
+      const price = t.priceNum ?? 0;
+      const val = t.value ?? 0;
+
+      totalValue += val;
+      totalPriceVolume += price * lot;
+    }
+
+    const totalLots = summary.totalVolume;
     const averageLot =
-      stockTrades.length > 0 ? totalLots / stockTrades.length : 0;
+      analyzedTrades.length > 0 ? totalLots / analyzedTrades.length : 0;
 
     // Volume-weighted average price (VWAP)
-    const totalPriceVolume = stockTrades.reduce((sum, _t, idx) => {
-      return sum + prices[idx] * lots[idx];
-    }, 0);
     const averagePrice = totalLots > 0 ? totalPriceVolume / totalLots : 0;
-
-    // Total value (price × volume)
-    const totalValue = stockTrades.reduce((sum, trade) => {
-      const lotNum = parseNumberFromString(trade.lot);
-      const priceNum = parseNumberFromString(trade.price);
-      return sum + priceNum * lotNum * 100;
-    }, 0);
 
     // Top brokers di anomali (whale / split)
     const brokerMap = new Map<string, { count: number; action: string }>();

@@ -161,6 +161,10 @@ export interface TradeItem {
   buyer_type: string;
   seller_type: string;
   market_board: string;
+  // Enriched fields (pre-calculated for performance)
+  priceNum?: number;
+  lotNum?: number;
+  value?: number;
 }
 
 export interface WatchlistSymbol {
