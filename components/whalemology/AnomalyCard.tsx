@@ -170,9 +170,11 @@ export function AnomalyCard({ anomalies }: AnomalyCardProps) {
   const { accumulationAnomalies, distributionAnomalies } = useMemo(() => {
     const accumulation = anomalies
       .filter((a) => a.dominantAction === 'ACCUMULATION')
+      .sort((a, b) => b.totalValue - a.totalValue) // Sort by highest Total Value
       .slice(0, 10);
     const distribution = anomalies
       .filter((a) => a.dominantAction === 'DISTRIBUTION')
+      .sort((a, b) => b.totalValue - a.totalValue) // Sort by highest Total Value
       .slice(0, 10);
     return {
       accumulationAnomalies: accumulation,

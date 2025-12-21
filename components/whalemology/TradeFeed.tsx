@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { analyzeTrades } from '@/lib/trade-analysis';
 import { Badge } from '@/components/ui/badge';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useLayoutEffect } from 'react';
 import { TradeRow } from './TradeRow';
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -31,6 +31,37 @@ export function TradeFeed({
   );
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef(0);
+  const prevFirstTradeNumberRef = useRef<string | null>(null);
+
+  // Handle scroll preservation when new trades are prepended
+  useLayoutEffect(() => {
+    const scrollElement = parentRef.current;
+    if (!scrollElement) return;
+
+    const currentScrollHeight = scrollElement.scrollHeight;
+    const currentFirstTradeNumber = analyzedTrades[0]?.trade_number;
+
+    // Check if new trades were added to the top (first trade number changed)
+    // We only adjust if there was a previous trade (not initial load)
+    if (
+      prevFirstTradeNumberRef.current &&
+      currentFirstTradeNumber !== prevFirstTradeNumberRef.current &&
+      analyzedTrades.length > 0
+    ) {
+      const heightDifference =
+        currentScrollHeight - prevScrollHeightRef.current;
+
+      // If user is scrolled down, adjust scroll position
+      if (scrollElement.scrollTop > 10 && heightDifference > 0) {
+        scrollElement.scrollTop += heightDifference;
+      }
+    }
+
+    // Update refs for next render
+    prevScrollHeightRef.current = currentScrollHeight;
+    prevFirstTradeNumberRef.current = currentFirstTradeNumber || null;
+  }, [analyzedTrades]);
 
   // Create virtualizer instance
   const virtualizer = useVirtualizer({

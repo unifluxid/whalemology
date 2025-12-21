@@ -178,6 +178,10 @@ export default function GlobalRunningTradePage() {
 
   const handleValuesChange = (newValues: string[]) => {
     setPendingSelectedSymbols(newValues);
+    // If closed, apply immediately (e.g. removing via "x" button)
+    if (!isMultiSelectOpen) {
+      setSelectedSymbols(newValues);
+    }
   };
 
   const handleOpenChange = (isOpen: boolean) => {

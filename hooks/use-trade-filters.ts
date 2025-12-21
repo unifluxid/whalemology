@@ -11,6 +11,14 @@ export interface UseTradeFiltersProps {
   initialSymbols?: string[];
 }
 
+function formatDateWIB(date: Date): string {
+  // WIB is UTC+7
+  const wibOffset = 7 * 60 * 60 * 1000;
+  const utc = date.getTime();
+  const wibDate = new Date(utc + wibOffset);
+  return wibDate.toISOString().split('T')[0];
+}
+
 export function useTradeFilters({
   initialSymbols = [],
 }: UseTradeFiltersProps = {}) {
@@ -105,8 +113,8 @@ export function useTradeFilters({
       time_range_end: timeRangeEnd || undefined,
       date:
         selectedDate instanceof Date
-          ? selectedDate.toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0],
+          ? formatDateWIB(selectedDate)
+          : formatDateWIB(new Date()),
       order_by: orderByMap[sortBy],
       sort: sortOrder,
       symbols: selectedSymbols.length > 0 ? selectedSymbols : undefined,

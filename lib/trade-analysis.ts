@@ -1,6 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { TradeItem } from './stockbit-types';
-// import { useTradeStore } from '@/store/trade-store'; // REMOVED
+import { ANALYSIS_CONFIG } from './analysis-config';
+
+// ----------------------------------------------------------------------
+// Interfaces
+// ----------------------------------------------------------------------
 
 export interface AnalyzedTrade extends TradeItem {
   analysis: {
@@ -18,8 +21,8 @@ export interface TradeAnalysisSummary {
   whaleCount: number;
   splitOrderCount: number;
   totalVolume: number;
-  totalSplitValue: number; // Total value dari semua split order events
-  splitIntensityScore: number; // Weighted score berdasarkan value + frequency
+  totalSplitValue: number;
+  splitIntensityScore: number;
 }
 
 export interface StockAnomaly {
@@ -28,98 +31,106 @@ export interface StockAnomaly {
   averagePrice: number;
   averageLot: number;
   totalVolume: number;
-  totalValue: number; // Total value in currency (price × volume)
+  totalValue: number;
   whaleCount: number;
   splitOrderCount: number;
-  totalSplitValue: number; // Total value dari split orders saja
-  splitIntensityScore: number; // Weighted split intensity
+  totalSplitValue: number;
+  splitIntensityScore: number;
   topBrokers: Array<{ broker: string; count: number; action: string }>;
   dominantAction: 'ACCUMULATION' | 'DISTRIBUTION';
   lastUpdate: string;
-  confidenceScore: number; // 1-6 Likert scale
+  confidenceScore: number;
 }
 
 export interface AggregateStockAnomaliesOptions {
-  /**
-   * Jika true, nama broker akan dimasking (BROKER_1, BROKER_2, ...)
-   * supaya tidak melanggar regulasi saat jam market.
-   */
   hideBrokerNames?: boolean;
 }
 
-// Internal helper type – normalized numeric fields
-interface EnrichedTrade extends TradeItem {
-  lotNum: number;
-  priceNum: number;
-  value: number; // priceNum * lotNum * 100
-  index: number;
-  timeSeconds: number; // Seconds since start of day (0-86399) or similar
-  changeNum: number; // Percentage change as number (e.g. 1.5 for +1.5%)
-}
+// ----------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------
 
-// Thresholds & parameters
-import { ANALYSIS_CONFIG } from './analysis-config';
-
-const {
-  WHALE_SINGLE_TRADE_THRESHOLD,
-  WHALE_GROUPED_TRADE_THRESHOLD,
-  MIN_SIGNIFICANT_VALUE,
-  SPLIT_ORDER_THRESHOLD,
-  MIN_SPLIT_TOTAL_VALUE,
-  TIME_DECAY_HALF_LIFE,
-  MIN_TOTAL_SCORE,
-} = ANALYSIS_CONFIG;
-
-export function parseNumberFromString(input: string): number {
+function parseNumberFromString(input: string): number {
+  if (!input) return 0;
+  // Faster replacement than regex if format is simple, but regex is safe enough
   const cleaned = input.replace(/,/g, '');
   const parsed = parseInt(cleaned, 10);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 export function enrichTrade(trade: TradeItem): TradeItem {
+  // If already enriched, return as is
   if (
     trade.priceNum !== undefined &&
     trade.lotNum !== undefined &&
     trade.value !== undefined &&
-    (trade as any).changeNum !== undefined
+    trade.changeNum !== undefined
   ) {
     return trade;
   }
+
   const lotNum = parseNumberFromString(trade.lot);
   const priceNum = parseNumberFromString(trade.price);
-  const value = priceNum * lotNum * 100;
+  const value = priceNum * lotNum * 100; // Indonesian stocks usually 1 lot = 100 shares
+
   // Parse change string "+1.5%" or "-0.5%" to number
-  const changeClean = trade.change.replace('%', '').replace('+', '');
-  const changeNum = parseFloat(changeClean) || 0;
-
-  return { ...trade, lotNum, priceNum, value, changeNum } as TradeItem & {
-    changeNum: number;
-  };
-}
-
-// Calculate confidence score (1-6 Likert scale)
-export function calculateConfidenceScore(anomaly: StockAnomaly): number {
-  let score = 0;
-
-  // Factor 1: Whale Intensity (Combined Count & Value influence) (0-3 points)
-  // We avoid double counting simply adding Count + Total Value.
-  // Instead, we score based on "Whale Presence Quality".
-  if (anomaly.whaleCount >= 3) {
-    score += 2;
-    // Bonus if they are HUGE whales average
-    const avgWhaleValue =
-      anomaly.whaleCount > 0 ? anomaly.totalValue / anomaly.whaleCount : 0;
-    if (avgWhaleValue > 200_000_000) score += 1; // High quality whales
-  } else if (anomaly.whaleCount >= 1) {
-    score += 1;
-    if (anomaly.totalValue >= 500_000_000) score += 0.5; // Single but huge
+  // Optimized: check length before regex
+  let changeNum = 0;
+  if (trade.change) {
+    const changeClean = trade.change.replace('%', '').replace('+', '');
+    changeNum = parseFloat(changeClean) || 0;
   }
 
-  // Factor 2: Split Order Intensity (0-2 points)
-  // Split orders indicate intent to hide.
-  if (anomaly.totalSplitValue >= 500_000_000) {
-    score += 2; // Strong hiding intent + High value
-  } else if (anomaly.totalSplitValue >= 200_000_000) {
+  return { ...trade, lotNum, priceNum, value, changeNum };
+}
+
+/**
+ * Classifies a single trade pattern based on action and price change context.
+ * This ensures alignment between individual trade tags and overall summary scores.
+ */
+function classifyTradePattern(
+  action: 'buy' | 'sell'
+): 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' {
+  if (action === 'buy') {
+    return 'ACCUMULATION';
+  } else {
+    // Action is 'sell'
+    // Logic: If HAKI (Sell) occurs while price is UP (change > 0), it *might* be absorption.
+    // However, purely labeling it "ACCUMULATION" can be confusing.
+    // We will keep the summary scoring nuanced, but for the badge/tag,
+    // if it's a Sell, we label it DISTRIBUTION to reflect the literal action,
+    // unless we introduce a specific "ABSORPTION" tag later.
+    // For now, to keep it simple and consistent with previous UI:
+    return 'DISTRIBUTION';
+  }
+}
+
+/**
+ * Calculates a confidence score (1-6) based on anomaly severity.
+ */
+export function calculateConfidenceScore(anomaly: StockAnomaly): number {
+  let score = 0;
+  const {
+    CONFIDENCE_WHALE_HIGH_VALUE,
+    CONFIDENCE_SPLIT_HIGH_VALUE,
+    CONFIDENCE_SPLIT_MEDIUM_VALUE,
+  } = ANALYSIS_CONFIG;
+
+  // Factor 1: Whale Intensity
+  if (anomaly.whaleCount >= 3) {
+    score += 2;
+    const avgWhaleValue =
+      anomaly.whaleCount > 0 ? anomaly.totalValue / anomaly.whaleCount : 0;
+    if (avgWhaleValue > CONFIDENCE_WHALE_HIGH_VALUE) score += 1;
+  } else if (anomaly.whaleCount >= 1) {
+    score += 1;
+    if (anomaly.totalValue >= 500_000_000) score += 0.5;
+  }
+
+  // Factor 2: Split Order Intensity
+  if (anomaly.totalSplitValue >= CONFIDENCE_SPLIT_HIGH_VALUE) {
+    score += 2;
+  } else if (anomaly.totalSplitValue >= CONFIDENCE_SPLIT_MEDIUM_VALUE) {
     score += 1.5;
   } else if (
     anomaly.splitOrderCount >= 2 &&
@@ -133,7 +144,7 @@ export function calculateConfidenceScore(anomaly: StockAnomaly): number {
     score += 0.5;
   }
 
-  // Factor 3: Broker Concentration (0-1 point) – High concentration = higher confidence it's a specific actor
+  // Factor 3: Broker Concentration
   if (anomaly.topBrokers.length > 0) {
     const totalEvents = anomaly.topBrokers.reduce((sum, b) => sum + b.count, 0);
     if (totalEvents > 0) {
@@ -147,11 +158,16 @@ export function calculateConfidenceScore(anomaly: StockAnomaly): number {
   return Math.min(Math.max(Math.round(score + 1), 1), 6);
 }
 
+// ----------------------------------------------------------------------
+// Main Logic
+// ----------------------------------------------------------------------
+
 export function analyzeTrades(trades: TradeItem[]): {
   analyzedTrades: AnalyzedTrade[];
   summary: TradeAnalysisSummary;
 } {
   const sourceTrades = trades;
+  // Pre-allocate to avoid repeated resizing if possible (though JS engines handle this well)
   const analyzedTrades: AnalyzedTrade[] = [];
 
   if (!sourceTrades || sourceTrades.length === 0) {
@@ -170,255 +186,220 @@ export function analyzeTrades(trades: TradeItem[]): {
     };
   }
 
-  // Phase 1: Enrich, Calculate Total Volume, Group by Time, and Find Max Time in one pass
+  const {
+    WHALE_SINGLE_TRADE_THRESHOLD,
+    WHALE_GROUPED_TRADE_THRESHOLD,
+    MIN_SIGNIFICANT_VALUE,
+    SPLIT_ORDER_THRESHOLD,
+    MIN_SPLIT_TOTAL_VALUE,
+    TIME_DECAY_HALF_LIFE,
+    MIN_TOTAL_SCORE,
+    IMBALANCE_THRESHOLD,
+  } = ANALYSIS_CONFIG;
+
+  // 1. Single Pass: Enrich, Time Grouping, Total Volume
+  // --------------------------------------------------
   let totalVolume = 0;
-  let maxSeconds = 0;
-  const timeGroups = new Map<string, EnrichedTrade[]>();
-  const enrichedTrades: EnrichedTrade[] = new Array(sourceTrades.length);
+  let maxSeconds = 0; // For time decay reference
+
+  // Using a flat Map with time string as key is standard.
+  // To avoid re-creating arrays constantly, we can just push indices or store refs.
+  // Storing trade objects is fine.
+  const timeInfoMap = new Map<string, TradeItem[]>();
+
+  // Use a strictly typed array for enriched items internally to avoid casting later
+  const enrichedList: TradeItem[] = [];
 
   for (let i = 0; i < sourceTrades.length; i++) {
-    const original = sourceTrades[i];
-    // Use helper to ensure enriched (should be fast if already done in store)
-    const t = enrichTrade(original);
+    const t = enrichTrade(sourceTrades[i]);
+    enrichedList.push(t);
+    totalVolume += t.lotNum!;
 
-    // Calculate timeSeconds for optimization
-    const parts = t.time.split(':');
-    const h = Number(parts[0]) || 0;
-    const m = Number(parts[1]) || 0;
-    const s = Number(parts[2]) || 0;
-    const timeSeconds = h * 3600 + m * 60 + s;
+    // Time decay calculation prep
+    const [h, m, s] = t.time.split(':').map(Number);
+    const secs = h * 3600 + m * 60 + s;
+    if (secs > maxSeconds) maxSeconds = secs;
 
-    if (timeSeconds > maxSeconds) {
-      maxSeconds = timeSeconds;
+    // Grouping for detection
+    let group = timeInfoMap.get(t.time);
+    if (!group) {
+      group = [];
+      timeInfoMap.set(t.time, group);
     }
-
-    // Cast to EnrichedTrade (we know it has num fields now) and add index
-    const enriched: EnrichedTrade = {
-      ...t,
-      lotNum: t.lotNum!,
-      priceNum: t.priceNum!,
-      value: t.value!,
-      changeNum: (t as any).changeNum ?? 0,
-      index: i,
-      timeSeconds,
-    };
-
-    enrichedTrades[i] = enriched;
-    totalVolume += enriched.lotNum;
-
-    // Grouping
-    const group = timeGroups.get(enriched.time);
-    if (group) {
-      group.push(enriched);
-    } else {
-      timeGroups.set(enriched.time, [enriched]);
-    }
+    group.push(t);
   }
 
-  // Flags per trade index
-  const isWhaleFlags = new Array<boolean>(enrichedTrades.length).fill(false);
-  const isSplitFlags = new Array<boolean>(enrichedTrades.length).fill(false);
+  // --- NEW: Calculate Average Trade Value for Relative Detection ---
+  // Avoid division by zero
+  const averageTradeValue =
+    enrichedList.length > 0
+      ? enrichedList.reduce((sum, t) => sum + t.value!, 0) / enrichedList.length
+      : 0;
 
-  // Event-level counting (supaya 1 event nggak keitung berkali-kali)
-  const whaleEventKeys = new Set<string>();
-  const splitOrderEventKeys = new Set<string>();
+  const {
+    RELATIVE_WHALE_MULTIPLIER,
+    MIN_RELATIVE_WHALE_ABSOLUTE_VALUE,
+    ABSORPTION_MIN_VALUE,
+  } = ANALYSIS_CONFIG;
 
-  // Track split order values per event
-  const splitOrderValues = new Map<string, number>();
+  // 2. Detection (Whale & Split)
+  // ----------------------------
+  // We will store detection results in Sets/Maps keyed by trade ID or Index to allow O(1) lookup.
+  // Since we don't have unique stable IDs for all trades guaranteed, we'll use object reference (Set<TradeItem>)
+  const whaleTrades = new Set<TradeItem>();
+  const splitTrades = new Set<TradeItem>();
 
-  // 1. Deteksi whale & split order (time + side + broker [+ price])
-  for (const [time, groupTrades] of timeGroups.entries()) {
-    // Map untuk group whale: side + broker
-    const whaleGroupValueMap = new Map<string, number>();
-    const whaleGroupTradesMap = new Map<string, EnrichedTrade[]>();
+  let whaleCount = 0; // Number of unique "whale events" (single or group)
+  let splitOrderCount = 0; // Number of unique "split events"
+  let totalSplitValue = 0;
+  let splitIntensityScore = 0;
 
-    // Map untuk split order: side + broker + price
-    const splitGroupTradesMap = new Map<string, EnrichedTrade[]>();
+  // Iterate over time groups
+  for (const groupTrades of timeInfoMap.values()) {
+    // Sub-grouping for detection logic
+    // We need to group by:
+    // - Whale: Side + Broker
+    // - Split: Side + Broker (and conceptually Price, though we allow sweeping)
 
-    for (const trade of groupTrades) {
-      const side = trade.action;
-      const brokerRaw =
-        side === 'buy'
-          ? (trade.buyer ?? 'UNKNOWN')
-          : (trade.seller ?? 'UNKNOWN');
-      const whaleKey = `${side}|${brokerRaw}`;
-      // REVISI LOGIC: Hapus price constraint agar bisa detect algo "sweeping" (beli di berbagai harga sekaligus)
-      const splitKey = `${side}|${brokerRaw}`;
+    // Key: "Side|Broker", Value: List of trades
+    const subGroups = new Map<string, TradeItem[]>();
 
-      // Whale grouping
-      const currentWhaleValue = whaleGroupValueMap.get(whaleKey) ?? 0;
-      whaleGroupValueMap.set(whaleKey, currentWhaleValue + trade.value);
-
-      const whaleTrades = whaleGroupTradesMap.get(whaleKey) ?? [];
-      whaleTrades.push(trade);
-      whaleGroupTradesMap.set(whaleKey, whaleTrades);
-
-      // Split order grouping
-      const splitTrades = splitGroupTradesMap.get(splitKey) ?? [];
-      splitTrades.push(trade);
-      splitGroupTradesMap.set(splitKey, splitTrades);
-    }
-
-    // 1.a Single-trade whale
-    for (const trade of groupTrades) {
-      if (trade.value >= WHALE_SINGLE_TRADE_THRESHOLD) {
-        isWhaleFlags[trade.index] = true;
-
-        const side = trade.action;
-        const brokerRaw =
-          side === 'buy'
-            ? (trade.buyer ?? 'UNKNOWN')
-            : (trade.seller ?? 'UNKNOWN');
-        const eventKey = `single|${time}|${side}|${brokerRaw}|${trade.priceNum}|${trade.lotNum}`;
-        whaleEventKeys.add(eventKey);
-      }
-    }
-
-    // 1.b Grouped whale: total value dalam 1 detik per side+broker
-    for (const [whaleKey, totalValueInSecond] of whaleGroupValueMap.entries()) {
-      const tradesInGroup = whaleGroupTradesMap.get(whaleKey) ?? [];
-      if (
-        tradesInGroup.length > 1 &&
-        totalValueInSecond >= WHALE_GROUPED_TRADE_THRESHOLD
-      ) {
-        const eventKey = `group|${time}|${whaleKey}`;
-        whaleEventKeys.add(eventKey);
-
-        for (const trade of tradesInGroup) {
-          isWhaleFlags[trade.index] = true;
+    // 1.a Detect Single Whales immediately & build subgroups
+    for (const t of groupTrades) {
+      // Logic 1: Absolute Whale
+      if (t.value! >= WHALE_SINGLE_TRADE_THRESHOLD) {
+        if (!whaleTrades.has(t)) {
+          whaleTrades.add(t);
+          whaleCount++; // A single trade is 1 event
         }
       }
+      // Logic 2: Relative Whale (Local Whale)
+      else if (
+        t.value! >= MIN_RELATIVE_WHALE_ABSOLUTE_VALUE &&
+        t.value! >= averageTradeValue * RELATIVE_WHALE_MULTIPLIER
+      ) {
+        if (!whaleTrades.has(t)) {
+          whaleTrades.add(t);
+          whaleCount++;
+        }
+      }
+
+      const side = t.action;
+      const broker =
+        side === 'buy' ? t.buyer || 'UNKNOWN' : t.seller || 'UNKNOWN';
+      const key = `${side}|${broker}`;
+
+      let subList = subGroups.get(key);
+      if (!subList) {
+        subList = [];
+        subGroups.set(key, subList);
+      }
+      subList.push(t);
     }
 
-    // 1.c Split order: banyak print dalam 1 detik per side+broker+price
-    // REVISI: Tambah minimum total value threshold
-    for (const [
-      splitKey,
-      tradesInSplitGroup,
-    ] of splitGroupTradesMap.entries()) {
-      if (tradesInSplitGroup.length > SPLIT_ORDER_THRESHOLD) {
-        // Hitung total value split group ini
-        const totalSplitValue = tradesInSplitGroup.reduce(
-          (sum, t) => sum + t.value,
-          0
-        );
+    // 1.b Detect Grouped Whales & Split Orders from subgroups
+    for (const trades of subGroups.values()) {
+      const count = trades.length;
+      if (count <= 0) continue;
 
-        // Hanya consider sebagai anomaly jika total value >= threshold
-        if (totalSplitValue >= MIN_SPLIT_TOTAL_VALUE) {
-          const eventKey = `split|${time}|${splitKey}`;
-          splitOrderEventKeys.add(eventKey);
-          splitOrderValues.set(eventKey, totalSplitValue);
+      const totalValue = trades.reduce((sum, t) => sum + t.value!, 0);
 
-          for (const trade of tradesInSplitGroup) {
-            isSplitFlags[trade.index] = true;
+      // --- Grouped Whale Check ---
+      // Check if not already counted as single whales?
+      // Actually, if a group forms a whale event, all trades inside are whale trades.
+      // If sum > threshold and count > 1
+      if (count > 1 && totalValue >= WHALE_GROUPED_TRADE_THRESHOLD) {
+        // This is a grouped whale event
+        whaleCount++;
+        for (const t of trades) {
+          whaleTrades.add(t);
+        }
+      }
+
+      // --- Split Order Check ---
+      // Logic: High frequency (count > threshold) AND significant value
+      if (count > SPLIT_ORDER_THRESHOLD) {
+        if (totalValue >= MIN_SPLIT_TOTAL_VALUE) {
+          splitOrderCount++;
+          totalSplitValue += totalValue;
+
+          // Intensity score
+          const intensityWeight = Math.log(1 + totalValue / 10_000_000);
+          splitIntensityScore += totalValue * intensityWeight;
+
+          for (const t of trades) {
+            splitTrades.add(t);
           }
         }
       }
     }
   }
 
-  const whaleCount = whaleEventKeys.size;
-  const splitOrderCount = splitOrderEventKeys.size;
-
-  // Hitung total split value & intensity score
-  let totalSplitValue = 0;
-  let splitIntensityScore = 0;
-
-  for (const value of splitOrderValues.values()) {
-    totalSplitValue += value;
-
-    // Intensity score: value * log(1 + numberOfSplits)
-    // Extract numberOfSplits from eventKey if needed, or use simple weighting
-    // For now: higher value = higher intensity
-    const intensityWeight = Math.log(1 + value / 10_000_000); // Log scale per 10M
-    splitIntensityScore += value * intensityWeight;
-  }
-
-  // 2. Scoring ACCUMULATION vs DISTRIBUTION with time-decay
-  // We don't need Date objects anymore, just relative seconds diff
-  // decay = exp( - (diffMinutes * LN2) / halfLife )
-  // diffMinutes = (maxSeconds - tradeSeconds) / 60
-
+  // 3. Scoring & Final Analysis Construction
+  // ----------------------------------------
   let accumulationScore = 0;
   let distributionScore = 0;
 
-  for (let i = 0; i < enrichedTrades.length; i++) {
-    const trade = enrichedTrades[i];
-    const isWhale = isWhaleFlags[trade.index];
-    const isSplitOrder = isSplitFlags[trade.index];
+  for (const t of enrichedList) {
+    const isWhale = whaleTrades.has(t);
+    const isSplit = splitTrades.has(t);
 
     const isSignificant =
-      (isWhale || isSplitOrder) && trade.value >= MIN_SIGNIFICANT_VALUE;
+      (isWhale || isSplit) && t.value! >= MIN_SIGNIFICANT_VALUE;
 
-    if (!isSignificant) {
-      continue;
-    }
-
-    const ageInMinutes = (maxSeconds - trade.timeSeconds) / 60;
-
-    // Exponential decay: trade yang lebih dekat ke "akhir hari" bobotnya lebih besar
+    // Calculate time decay
+    // Re-calculate seconds here or store it on enriched?
+    // Optimization: Calculate once.
+    const [h, m, s] = t.time.split(':').map(Number);
+    const tSecs = h * 3600 + m * 60 + s;
+    const ageMinutes = (maxSeconds - tSecs) / 60;
     const timeWeight = Math.exp(
-      (-ageInMinutes * Math.LN2) / TIME_DECAY_HALF_LIFE
+      (-ageMinutes * Math.LN2) / TIME_DECAY_HALF_LIFE
     );
 
-    const tradeScore = trade.lotNum * trade.priceNum * timeWeight;
-
-    if (trade.action === 'buy') {
-      accumulationScore += tradeScore;
-    } else {
-      // Logic Revisi: Passive Accumulation / Absorption check
-      // Jika action sell (HAKI) tapi harga naik/hijau (change > 0),
-      // kemungkinan itu adalah Absorption (Limit Buy Whales dimakan retail panic sell).
-      // Kita split score 50:50 atau 30:70, jangan full distribution.
-      // Simplify: Jika change > 0, anggap 50% absorpsi.
-      const changeNum = (trade as any).changeNum ?? 0;
-
-      if (changeNum > 0) {
-        accumulationScore += tradeScore * 0.5; // Absorbed
-        distributionScore += tradeScore * 0.5; // Still selling pressure
-      } else {
-        distributionScore += tradeScore;
-      }
-    }
-  }
-
-  // 3. Bangun analyzedTrades dengan pattern per trade
-  const analyzed = enrichedTrades.map<AnalyzedTrade>((trade) => {
-    const { index, ...tradeData } = trade; // Keep value, lotNum, etc.
-
-    const isWhale = isWhaleFlags[index];
-    const isSplitOrder = isSplitFlags[index];
-
-    let pattern: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' = 'NEUTRAL';
-
-    // Use tradeData.value which is now preserved
-    const isSignificant =
-      (isWhale || isSplitOrder) &&
-      (tradeData.value ?? 0) >= MIN_SIGNIFICANT_VALUE;
-
+    // Score accumulation/distribution
     if (isSignificant) {
-      // Pattern per trade hanya tergantung side, scoring-nya sudah di-aggregate di atas
-      if (tradeData.action === 'buy') {
-        pattern = 'ACCUMULATION';
+      const baseScore = t.value! * timeWeight;
+
+      if (t.action === 'buy') {
+        accumulationScore += baseScore;
       } else {
-        pattern = 'DISTRIBUTION';
+        // Sell logic with absorption
+        if (t.changeNum! > 0) {
+          // Passive accumulation / Absorption logic
+          // Only count as accumulation if the trade is large enough to be a "wall" being hit
+          if (t.value! >= ABSORPTION_MIN_VALUE) {
+            accumulationScore += baseScore * 0.5;
+            distributionScore += baseScore * 0.5;
+          } else {
+            // Retail profit taking / small sells on rise = Distribution (selling pressure)
+            distributionScore += baseScore;
+          }
+        } else {
+          distributionScore += baseScore;
+        }
       }
     }
 
-    return {
-      ...tradeData,
+    // Classify pattern for UI
+    let pattern: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' = 'NEUTRAL';
+    if (isSignificant) {
+      pattern = classifyTradePattern(t.action);
+    }
+
+    analyzedTrades.push({
+      ...t,
       analysis: {
         isWhale,
-        isSplitOrder,
-        sameTimeCount: timeGroups.get(tradeData.time)?.length ?? 0,
+        isSplitOrder: isSplit,
+        sameTimeCount: timeInfoMap.get(t.time)?.length ?? 0,
         pattern,
       },
-    };
-  });
+    });
+  }
 
-  analyzedTrades.push(...analyzed);
-
-  // 4. Tentukan dominant action pakai imbalance + minimum strength
+  // 4. Dominant Action Summary
+  // --------------------------
   const totalScore = accumulationScore + distributionScore;
   let dominantAction: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' = 'NEUTRAL';
 
@@ -426,9 +407,9 @@ export function analyzeTrades(trades: TradeItem[]): {
     const imbalance =
       totalScore > 0 ? (accumulationScore - distributionScore) / totalScore : 0;
 
-    if (imbalance > 0.3) {
+    if (imbalance > IMBALANCE_THRESHOLD) {
       dominantAction = 'ACCUMULATION';
-    } else if (imbalance < -0.3) {
+    } else if (imbalance < -IMBALANCE_THRESHOLD) {
       dominantAction = 'DISTRIBUTION';
     }
   }
@@ -448,35 +429,40 @@ export function analyzeTrades(trades: TradeItem[]): {
   };
 }
 
-// Aggregate anomalies by stock
 export function aggregateStockAnomalies(
   trades: TradeItem[],
   options: AggregateStockAnomaliesOptions = {}
 ): StockAnomaly[] {
   const { hideBrokerNames = false } = options;
 
-  const sourceTrades = trades;
+  // Group by symbol first
   const stocksMap = new Map<string, TradeItem[]>();
-
-  // Group trades by symbol
-  sourceTrades.forEach((trade) => {
-    if (!stocksMap.has(trade.code)) {
-      stocksMap.set(trade.code, []);
+  for (const t of trades) {
+    let list = stocksMap.get(t.code);
+    if (!list) {
+      list = [];
+      stocksMap.set(t.code, list);
     }
-    stocksMap.get(trade.code)!.push(trade);
-  });
+    list.push(t);
+  }
 
   const anomalies: StockAnomaly[] = [];
 
-  // Analyze each stock
-  stocksMap.forEach((stockTrades, symbol) => {
+  for (const [symbol, stockTrades] of stocksMap.entries()) {
     const { analyzedTrades, summary } = analyzeTrades(stockTrades);
 
-    // Only include stocks with anomalies
-    if (summary.whaleCount === 0 && summary.splitOrderCount === 0) return;
-    if (summary.dominantAction === 'NEUTRAL') return;
+    // Filter out uninteresting stocks
+    if (
+      summary.whaleCount === 0 &&
+      summary.splitOrderCount === 0 &&
+      summary.dominantAction === 'NEUTRAL'
+    ) {
+      continue;
+    }
 
-    // Build reasons
+    // --- Build Anomaly Object ---
+
+    // 1. Reasons HTML
     const reasons: string[] = [];
     if (summary.whaleCount > 0) {
       reasons.push(
@@ -484,101 +470,93 @@ export function aggregateStockAnomalies(
       );
     }
     if (summary.splitOrderCount > 0) {
-      // Tampilkan value split jika signifikan
       const splitValueInM = Math.round(summary.totalSplitValue / 1_000_000);
       reasons.push(
         `🧩 <span class="text-foreground font-semibold">${summary.splitOrderCount}</span> split order${summary.splitOrderCount > 1 ? 's' : ''} (~${splitValueInM}M)`
       );
     }
 
-    // Calculate averages dan total value using enriched data from analyzedTrades
+    // 2. Stats
+    // Assuming analyzedTrades are already enriched
     let totalValue = 0;
     let totalPriceVolume = 0;
 
     for (const t of analyzedTrades) {
-      // These are guaranteed to be present from analyzeTrades
-      const lot = t.lotNum ?? 0;
-      const price = t.priceNum ?? 0;
-      const val = t.value ?? 0;
-
-      totalValue += val;
-      totalPriceVolume += price * lot;
+      totalValue += t.value!;
+      totalPriceVolume += t.priceNum! * t.lotNum!;
     }
 
+    // Safety check for division by zero
+    const count = analyzedTrades.length;
     const totalLots = summary.totalVolume;
-    const averageLot =
-      analyzedTrades.length > 0 ? totalLots / analyzedTrades.length : 0;
 
-    // Volume-weighted average price (VWAP)
+    const averageLot = count > 0 ? totalLots / count : 0;
     const averagePrice = totalLots > 0 ? totalPriceVolume / totalLots : 0;
 
-    // Top brokers di anomali (whale / split)
-    const brokerMap = new Map<string, { count: number; action: string }>();
+    // 3. Top Brokers
+    const brokerStats = new Map<string, { count: number; action: string }>();
 
-    analyzedTrades
-      .filter((t) => t.analysis.isWhale || t.analysis.isSplitOrder)
-      .forEach((trade) => {
-        const side = trade.action;
-        const rawBroker =
-          side === 'buy'
-            ? (trade.buyer ?? 'UNKNOWN')
-            : (trade.seller ?? 'UNKNOWN');
-
-        if (!brokerMap.has(rawBroker)) {
-          brokerMap.set(rawBroker, { count: 0, action: trade.action });
-        }
-        const broker = brokerMap.get(rawBroker)!;
-        broker.count++;
-      });
-
-    const brokerEntries = Array.from(brokerMap.entries()).map(
-      ([broker, data]) => ({
-        broker,
-        ...data,
-      })
+    // Only analyze brokers from significant events (Whale or Split)
+    const significantTrades = analyzedTrades.filter(
+      (t) => t.analysis.isWhale || t.analysis.isSplitOrder
     );
 
-    brokerEntries.sort((a, b) => b.count - a.count);
+    for (const t of significantTrades) {
+      const side = t.action;
+      const tBroker = side === 'buy' ? t.buyer : t.seller;
+      const brokerName = tBroker || 'UNKNOWN';
 
-    const topBrokerEntries = brokerEntries.slice(0, 3);
-
-    const topBrokers = topBrokerEntries.map((entry, index) => {
-      // Hide broker name if hideBrokerNames option OR if is_broker_exists is false
-      let displayBroker = entry.broker;
-
-      if (hideBrokerNames) {
-        displayBroker = `BROKER_${index + 1}`;
-      } else {
-        // Check if any trade with this broker has is_broker_exists = false
-        const hasMissingBroker = analyzedTrades
-          .filter((t) => t.analysis.isWhale || t.analysis.isSplitOrder)
-          .some((trade) => {
-            const side = trade.action;
-            const tradeBroker = side === 'buy' ? trade.buyer : trade.seller;
-            return tradeBroker === entry.broker && !trade.is_broker_exists;
-          });
-
-        if (hasMissingBroker) {
-          displayBroker = `BROKER_${index + 1}`;
-        }
+      let entry = brokerStats.get(brokerName);
+      if (!entry) {
+        entry = { count: 0, action: t.action };
+        brokerStats.set(brokerName, entry);
       }
-
-      return {
-        broker: displayBroker,
-        count: entry.count,
-        action: entry.action,
-      };
-    });
-
-    // Last update: trade dengan waktu terbesar (karena data harian)
-    let lastUpdate = stockTrades[0]?.time ?? new Date().toLocaleTimeString();
-    for (const t of stockTrades) {
-      if (t.time > lastUpdate) {
-        lastUpdate = t.time;
-      }
+      entry.count++;
     }
 
-    const anomaly: StockAnomaly = {
+    const sortedBrokers = Array.from(brokerStats.entries())
+      .map(([broker, data]) => ({ broker, ...data }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+
+    // Apply strict privacy masking
+    const finalBrokers = sortedBrokers.map((entry, idx) => {
+      let displayName = entry.broker;
+
+      // Mask if forced by option OR if checks fail
+      let shouldMask = hideBrokerNames;
+
+      if (!shouldMask) {
+        // Check if any significant trade with this broker has is_broker_exists = false
+        const hasHiddenBroker = significantTrades.some((t) => {
+          const tBroker = t.action === 'buy' ? t.buyer : t.seller;
+          return tBroker === entry.broker && !t.is_broker_exists;
+        });
+        if (hasHiddenBroker) shouldMask = true;
+      }
+
+      if (shouldMask) {
+        displayName = `BROKER_${idx + 1}`;
+      }
+
+      return { ...entry, broker: displayName };
+    });
+
+    // 4. Last Update
+    // Efficient max finding
+    let lastUpdate = '';
+    if (stockTrades.length > 0) {
+      // Assuming sorted by time? Usually yes, but safer to loop
+      // Or just take the maxSeconds logic if we kept it?
+      // simple loop:
+      for (const t of stockTrades) {
+        if (t.time > lastUpdate) lastUpdate = t.time;
+      }
+    } else {
+      lastUpdate = new Date().toLocaleTimeString();
+    }
+
+    const anomalyObj: StockAnomaly = {
       symbol,
       reasons,
       averagePrice,
@@ -589,18 +567,16 @@ export function aggregateStockAnomalies(
       splitOrderCount: summary.splitOrderCount,
       totalSplitValue: summary.totalSplitValue,
       splitIntensityScore: summary.splitIntensityScore,
-      topBrokers,
+      topBrokers: finalBrokers,
       dominantAction: summary.dominantAction as 'ACCUMULATION' | 'DISTRIBUTION',
       lastUpdate,
       confidenceScore: 0,
     };
 
-    // Hitung confidence score
-    anomaly.confidenceScore = calculateConfidenceScore(anomaly);
+    anomalyObj.confidenceScore = calculateConfidenceScore(anomalyObj);
+    anomalies.push(anomalyObj);
+  }
 
-    anomalies.push(anomaly);
-  });
-
-  // Sort by total volume (most active first)
+  // Sort: Highest volume first
   return anomalies.sort((a, b) => b.totalVolume - a.totalVolume);
 }

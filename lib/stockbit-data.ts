@@ -8,6 +8,8 @@ import {
   SearchResponse,
 } from './stockbit-types';
 
+import { useAuthStore } from '@/store/auth';
+
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
 export async function fetchStockbitData<T>(
@@ -24,6 +26,28 @@ export async function fetchStockbitData<T>(
     method: method,
     headers: headers,
   });
+
+  if (res.status === 401) {
+    // Global 401 Handler
+    // 1. Clear local state
+    useAuthStore.getState().logout();
+
+    // 2. Clear httpOnly cookie via backend route
+    // We use a simple fetch here, ignoring result as we are redirecting anyway
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to clear cookie on 401', e);
+    }
+
+    // 3. Redirect to login (Client-side only)
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+
+    throw new Error('Unauthorized: Session expired');
+  }
+
   if (!res.ok) {
     throw new Error(`Failed to fetch ${endpoint}: ${res.statusText}`);
   }

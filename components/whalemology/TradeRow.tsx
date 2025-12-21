@@ -31,7 +31,7 @@ export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
 
   const content = (
     <div
-      className={`grid grid-cols-12 items-center gap-2 rounded border border-transparent px-1 py-2 text-xs transition-colors ${rowClass} ${!isBrokerKnown ? '' : 'cursor-help'}`}
+      className={`grid grid-cols-12 items-center gap-2 rounded border border-transparent px-1 py-2 text-xs transition-colors ${rowClass} cursor-help`}
     >
       <div className="text-muted-foreground col-span-2 flex flex-col font-mono">
         <span>{trade.time}</span>
@@ -77,10 +77,6 @@ export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
     </div>
   );
 
-  if (!isBrokerKnown) {
-    return content;
-  }
-
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>{content}</TooltipTrigger>
@@ -123,35 +119,43 @@ export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
               </div>
             </div>
           </div>
-          <div className="border-border space-y-1 border-t pt-2 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Buyer:</span>
-              <span className="text-foreground font-mono">{trade.buyer}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Seller:</span>
-              <span className="text-foreground font-mono">{trade.seller}</span>
-            </div>
-          </div>
-          {(isWhale || isSplitOrder) && (
-            <div className="border-border space-y-1 space-x-2 border-t pt-2">
-              {isWhale && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-500 bg-amber-500/10 text-[10px] text-amber-400"
-                >
-                  🐋 WHALE TRADE
-                </Badge>
+          {isBrokerKnown && (
+            <>
+              <div className="border-border space-y-1 border-t pt-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Buyer:</span>
+                  <span className="text-foreground font-mono">
+                    {trade.buyer}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Seller:</span>
+                  <span className="text-foreground font-mono">
+                    {trade.seller}
+                  </span>
+                </div>
+              </div>
+              {(isWhale || isSplitOrder) && (
+                <div className="border-border space-y-1 space-x-2 border-t pt-2">
+                  {isWhale && (
+                    <Badge
+                      variant="outline"
+                      className="border-amber-500 bg-amber-500/10 text-[10px] text-amber-400"
+                    >
+                      🐋 WHALE TRADE
+                    </Badge>
+                  )}
+                  {isSplitOrder && (
+                    <Badge
+                      variant="outline"
+                      className="border-blue-500 bg-blue-500/10 text-[10px] text-blue-400"
+                    >
+                      🧩 SPLIT ORDER
+                    </Badge>
+                  )}
+                </div>
               )}
-              {isSplitOrder && (
-                <Badge
-                  variant="outline"
-                  className="border-blue-500 bg-blue-500/10 text-[10px] text-blue-400"
-                >
-                  🧩 SPLIT ORDER
-                </Badge>
-              )}
-            </div>
+            </>
           )}
         </div>
       </TooltipContent>

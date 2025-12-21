@@ -165,6 +165,7 @@ export interface TradeItem {
   priceNum?: number;
   lotNum?: number;
   value?: number;
+  changeNum?: number;
 }
 
 export interface WatchlistSymbol {
