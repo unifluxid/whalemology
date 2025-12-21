@@ -78,7 +78,7 @@ export function MultiSelect({
   }, []);
 
   return (
-    <MultiSelectContext
+    <MultiSelectContext.Provider
       value={{
         open,
         setOpen,
@@ -98,7 +98,7 @@ export function MultiSelect({
       >
         {children}
       </Popover>
-    </MultiSelectContext>
+    </MultiSelectContext.Provider>
   );
 }
 
@@ -144,8 +144,8 @@ export function MultiSelectValue({
 } & Omit<ComponentPropsWithoutRef<'div'>, 'children'>) {
   const { selectedValues, toggleValue, items, open } = useMultiSelectContext();
   const [overflowAmount, setOverflowAmount] = useState(0);
-  const valueRef = useRef<HTMLDivElement>(null);
-  const overflowRef = useRef<HTMLDivElement>(null);
+  const valueRef = useRef<HTMLDivElement | null>(null);
+  const overflowRef = useRef<HTMLDivElement | null>(null);
 
   const shouldWrap =
     overflowBehavior === 'wrap' ||
