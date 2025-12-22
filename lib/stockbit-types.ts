@@ -261,3 +261,93 @@ export interface SearchResponse {
     };
   };
 }
+
+export interface MarketMoverResponse {
+  message: string;
+  data: {
+    mover_list: MoverItem[];
+    mover_type: string;
+    is_show_net_foreign: boolean;
+    net_foreign_updated_at: string;
+  };
+}
+
+export interface MoverItem {
+  stock_detail: {
+    code: string;
+    name: string;
+    icon_url: string;
+    has_uma: boolean;
+    notations: unknown[];
+    corpaction: {
+      active: boolean;
+      icon_url: string;
+      text: string;
+    };
+  };
+  price: number;
+  change: {
+    value: number;
+    percentage: number;
+  };
+  value: {
+    raw: number;
+    formatted: string;
+  };
+  volume: {
+    raw: number;
+    formatted: string;
+  };
+  frequency: {
+    raw: number;
+    formatted: string;
+  };
+  net_foreign_buy: {
+    raw: number;
+    formatted: string;
+  };
+  net_foreign_sell: {
+    raw: number;
+    formatted: string;
+  };
+}
+
+export interface OrderbookResponse {
+  data: {
+    average: number;
+    bid: OrderbookItem[];
+    change: number;
+    close: number;
+    country: string;
+    domestic: string;
+    down: string;
+    exchange: string;
+    fbuy: number;
+    fnet: number;
+    foreign: string;
+    frequency: number;
+    fsell: number;
+    high: number;
+    id: string;
+    lastprice: number;
+    low: number;
+    offer: OrderbookItem[];
+    open: number;
+    percentage_change: number;
+    previous: number;
+    status: string;
+    symbol: string;
+    tradable: boolean;
+    unchanged: string;
+    up: string;
+    val: number;
+    volume: number;
+  };
+}
+
+export interface OrderbookItem {
+  price: string;
+  que_num: string;
+  volume: string;
+  change_percentage: string;
+}

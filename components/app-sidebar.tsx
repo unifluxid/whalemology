@@ -1,10 +1,14 @@
 'use client';
 
 import * as React from 'react';
-import { Activity, LayoutDashboard, MonitorSmartphoneIcon } from 'lucide-react';
+import {
+  Activity,
+  LayoutDashboard,
+  MonitorSmartphoneIcon,
+  TrendingUp,
+} from 'lucide-react';
 
 import { NavMain } from '@/components/nav-main';
-import { NavProjects } from '@/components/nav-projects';
 import { NavUser } from '@/components/nav-user';
 import { TeamSwitcher } from '@/components/team-switcher';
 import {
@@ -54,8 +58,19 @@ const data = {
         },
       ],
     },
+    {
+      title: 'Strategies',
+      url: '/open-low',
+      icon: TrendingUp,
+      isActive: true,
+      items: [
+        {
+          title: 'Open = Low',
+          url: '/open-low',
+        },
+      ],
+    },
   ],
-  projects: [],
 };
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -66,7 +81,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={data.navMain} />
-        <NavProjects projects={data.projects} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

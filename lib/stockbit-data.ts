@@ -6,6 +6,8 @@ import {
   RunningTrade,
   WatchlistResponse,
   SearchResponse,
+  OrderbookResponse,
+  MarketMoverResponse,
 } from './stockbit-types';
 
 import { useAuthStore } from '@/store/auth';
@@ -203,6 +205,53 @@ export async function searchSymbols(
   // Based on search.md: GET search?keyword={keyword}&page=0&type=company
   return fetchStockbitData<SearchResponse>(
     `search?keyword=${encodeURIComponent(keyword)}&page=0&type=company`,
+    token
+  );
+}
+
+export async function getOrderbook(
+  symbol: string,
+  token?: string
+): Promise<OrderbookResponse> {
+  if (USE_MOCK) return MOCK_ORDERBOOK;
+  // Based on orderbook.md: company-price-feed/v2/orderbook/companies/{symbol}
+  return fetchStockbitData<OrderbookResponse>(`orderbook/${symbol}`, token);
+}
+
+export interface MarketMoverOptions {
+  mover_type?:
+    | 'MOVER_TYPE_TOP_GAINER'
+    | 'MOVER_TYPE_TOP_LOSER'
+    | 'MOVER_TYPE_MOST_ACTIVE'
+    | 'MOVER_TYPE_MOST_ACTIVE_VALUE'
+    | 'MOVER_TYPE_MOST_ACTIVE_FREQ';
+  filter_stocks?: string[]; // e.g., ['FILTER_STOCKS_TYPE_MAIN_BOARD', 'FILTER_STOCKS_TYPE_DEVELOPMENT_BOARD']
+  limit?: number;
+}
+
+export async function getMarketMover(
+  token?: string,
+  options?: MarketMoverOptions
+): Promise<MarketMoverResponse> {
+  // Defaults based on movers.md or typical usage
+  const moverType = options?.mover_type || 'MOVER_TYPE_TOP_GAINER';
+
+  let filterStocksParam = '';
+  if (options?.filter_stocks && options.filter_stocks.length > 0) {
+    filterStocksParam = options.filter_stocks
+      .map((f) => `&filter_stocks=${f}`)
+      .join('');
+  } else {
+    // Default filters if none provided, to match behavior in service or typical dashboard
+    filterStocksParam =
+      '&filter_stocks=FILTER_STOCKS_TYPE_MAIN_BOARD&filter_stocks=FILTER_STOCKS_TYPE_DEVELOPMENT_BOARD';
+  }
+
+  // NOTE: Assuming API supports limit param if documented, otherwise ignored. kept generic.
+
+  // Based on movers.md: order-trade/market-mover
+  return fetchStockbitData<MarketMoverResponse>(
+    `order-trade/market-mover?mover_type=${moverType}${filterStocksParam}`,
     token
   );
 }
@@ -531,5 +580,38 @@ export const MOCK_RUNNING_TRADE: RunningTrade = {
     is_show_bs: true,
     break_time_left_seconds: 0,
     date: '2025-12-08',
+  },
+};
+
+export const MOCK_ORDERBOOK: OrderbookResponse = {
+  data: {
+    average: 13136,
+    bid: [],
+    change: -300,
+    close: 13175,
+    country: 'ID',
+    domestic: '60.77',
+    down: '110',
+    exchange: 'IDX',
+    fbuy: 5895447500,
+    fnet: -1188677500,
+    foreign: '39.23',
+    frequency: 1917,
+    fsell: 7084125000,
+    high: 13500,
+    id: 'GGRM-0',
+    lastprice: 13175,
+    low: 13000,
+    offer: [],
+    open: 13500,
+    percentage_change: -2.23,
+    previous: 13475,
+    status: 'Active',
+    symbol: 'GGRM',
+    tradable: true,
+    unchanged: '1118',
+    up: '265',
+    val: 0,
+    volume: 0,
   },
 };
