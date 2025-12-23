@@ -470,9 +470,17 @@ export function aggregateStockAnomalies(
       );
     }
     if (summary.splitOrderCount > 0) {
-      const splitValueInM = Math.round(summary.totalSplitValue / 1_000_000);
+      let formattedValue = '';
+      if (summary.totalSplitValue >= 1_000_000_000) {
+        formattedValue = `${(summary.totalSplitValue / 1_000_000_000).toFixed(1)}B`;
+      } else if (summary.totalSplitValue >= 1_000_000) {
+        formattedValue = `${(summary.totalSplitValue / 1_000_000).toFixed(0)}M`;
+      } else {
+        formattedValue = `${(summary.totalSplitValue / 1_000).toFixed(0)}K`;
+      }
+
       reasons.push(
-        `🧩 <span class="text-foreground font-semibold">${summary.splitOrderCount}</span> split order${summary.splitOrderCount > 1 ? 's' : ''} (~${splitValueInM}M)`
+        `🧩 <span class="text-foreground font-semibold">${summary.splitOrderCount}</span> split order${summary.splitOrderCount > 1 ? 's' : ''} (~${formattedValue})`
       );
     }
 
