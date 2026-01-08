@@ -52,7 +52,7 @@ import { useTradeFilters } from '@/hooks/use-trade-filters';
 import { useSymbolSearch } from '@/hooks/use-symbol-search';
 import { useRunningTrades } from '@/hooks/use-running-trades';
 import { useRunningTradeWS } from '@/hooks/use-running-trade-ws';
-import { useOrderFlow } from '@/hooks/use-order-flow';
+import { useOrderFlowThrottled } from '@/hooks/use-order-flow';
 import useDatafeedSocket from '@/lib/datafeed/useDatafeedSocket';
 import {
   useRunningTradeStore,
@@ -358,9 +358,11 @@ export default function GlobalRunningTradePage() {
   // Note: Auth redirects are now handled by AuthProvider
   // Session sync is no longer needed here
 
-  // Calculate order flow statistics per symbol
-  const orderFlowStats = useOrderFlow({
+  // Calculate order flow statistics per symbol (throttled to 500ms)
+  const orderFlowStats = useOrderFlowThrottled({
     trades: rawData?.data.running_trade ?? null,
+    interval: 500, // Analyze every 500ms instead of every change
+    // Always enabled - Market Radar should analyze even when WS is paused
   });
 
   // Title effect

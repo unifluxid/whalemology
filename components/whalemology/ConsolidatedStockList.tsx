@@ -6,7 +6,14 @@ import { Badge } from '@/components/ui/badge';
 import { OrderFlowResult, SymbolOrderFlow } from '@/hooks/use-order-flow';
 import { Radar } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+
+type SignalFilter =
+  | 'all'
+  | 'markup'
+  | 'accumulation'
+  | 'distribution'
+  | 'markdown';
 
 interface ConsolidatedStockListProps {
   data: OrderFlowResult;
@@ -149,20 +156,102 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
   );
 }
 
+// Tab configuration
+const TAB_CONFIG: {
+  value: SignalFilter;
+  label: string;
+  emoji: string;
+  color: string;
+  activeColor: string;
+}[] = [
+  {
+    value: 'all',
+    label: 'All',
+    emoji: '',
+    color: 'text-muted-foreground',
+    activeColor: 'bg-primary text-primary-foreground',
+  },
+  {
+    value: 'markup',
+    label: 'Buy Now',
+    emoji: '🚀',
+    color: 'text-blue-500',
+    activeColor: 'bg-blue-500 text-white',
+  },
+  {
+    value: 'accumulation',
+    label: 'Buy Dip',
+    emoji: '💰',
+    color: 'text-emerald-500',
+    activeColor: 'bg-emerald-500 text-white',
+  },
+  {
+    value: 'distribution',
+    label: 'Dist',
+    emoji: '💦',
+    color: 'text-red-500',
+    activeColor: 'bg-red-500 text-white',
+  },
+  {
+    value: 'markdown',
+    label: 'Panic',
+    emoji: '🚨',
+    color: 'text-orange-500',
+    activeColor: 'bg-orange-500 text-white',
+  },
+];
+
 export function ConsolidatedStockList({
   data,
   className,
 }: ConsolidatedStockListProps) {
-  // Sort logic:
-  // 1. Items with Strong Signals first (Accum/Dist/Haka/Panic) - ordered by Signal Score magnitude
-  // 2. Then items by absolute pressure score
-  const sortedList = useMemo(() => {
-    return [...data.allSymbols].sort((a, b) => {
+  const [activeFilter, setActiveFilter] = useState<SignalFilter>('all');
+
+  // Sorted and filtered list
+  const filteredList = useMemo(() => {
+    let list = [...data.allSymbols];
+
+    // Apply filter
+    if (activeFilter !== 'all') {
+      if (activeFilter === 'markup') {
+        // Buy Now = markup with bestEntryPrice
+        list = list.filter(
+          (s) => s.signal === 'markup' && s.bestEntryPrice > 0
+        );
+      } else if (activeFilter === 'accumulation') {
+        // Buy Dip = accumulation with bestEntryPrice
+        list = list.filter(
+          (s) => s.signal === 'accumulation' && s.bestEntryPrice > 0
+        );
+      } else {
+        list = list.filter((s) => s.signal === activeFilter);
+      }
+    }
+
+    // Sort: Strong signals first, then by pressure
+    return list.sort((a, b) => {
       const scoreA = Math.abs(a.signalScore) * 100 + Math.abs(a.pressureScore);
       const scoreB = Math.abs(b.signalScore) * 100 + Math.abs(b.pressureScore);
       return scoreB - scoreA;
     });
-  }, [data.allSymbols]);
+  }, [data.allSymbols, activeFilter]);
+
+  // Counts for each tab
+  const counts = useMemo(
+    () => ({
+      all: data.allSymbols.length,
+      markup: data.allSymbols.filter(
+        (s) => s.signal === 'markup' && s.bestEntryPrice > 0
+      ).length,
+      accumulation: data.allSymbols.filter(
+        (s) => s.signal === 'accumulation' && s.bestEntryPrice > 0
+      ).length,
+      distribution: data.allSymbols.filter((s) => s.signal === 'distribution')
+        .length,
+      markdown: data.allSymbols.filter((s) => s.signal === 'markdown').length,
+    }),
+    [data.allSymbols]
+  );
 
   return (
     <Card
@@ -172,70 +261,65 @@ export function ConsolidatedStockList({
       )}
     >
       <CardHeader className="border-border bg-card/50 shrink-0 border-b px-4 py-3 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-sm font-medium">
-            <Radar className="text-primary h-4 w-4" />
-            Market Radar
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            {/* Buy Now count */}
-            {sortedList.filter(
-              (s) => s.signal === 'markup' && s.bestEntryPrice > 0
-            ).length > 0 && (
-              <Badge className="border-blue-500/30 bg-blue-500/15 text-[10px] text-blue-500">
-                🚀 Buy Now{' '}
-                {
-                  sortedList.filter(
-                    (s) => s.signal === 'markup' && s.bestEntryPrice > 0
-                  ).length
-                }
-              </Badge>
-            )}
-            {/* Buy Dip count */}
-            {sortedList.filter(
-              (s) => s.signal === 'accumulation' && s.bestEntryPrice > 0
-            ).length > 0 && (
-              <Badge className="border-emerald-500/30 bg-emerald-500/15 text-[10px] text-emerald-500">
-                💰 Buy Dip{' '}
-                {
-                  sortedList.filter(
-                    (s) => s.signal === 'accumulation' && s.bestEntryPrice > 0
-                  ).length
-                }
-              </Badge>
-            )}
-            {/* Distribution count */}
-            {sortedList.filter((s) => s.signal === 'distribution').length >
-              0 && (
-              <Badge className="border-red-500/30 bg-red-500/15 text-[10px] text-red-500">
-                � Dist{' '}
-                {sortedList.filter((s) => s.signal === 'distribution').length}
-              </Badge>
-            )}
-            {/* Panic count */}
-            {sortedList.filter((s) => s.signal === 'markdown').length > 0 && (
-              <Badge className="border-orange-500/30 bg-orange-500/15 text-[10px] text-orange-500">
-                🚨 Panic{' '}
-                {sortedList.filter((s) => s.signal === 'markdown').length}
-              </Badge>
-            )}
-            {/* Total */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Radar className="text-primary h-4 w-4" />
+              Market Radar
+            </CardTitle>
             <Badge variant="secondary" className="text-[10px]">
-              {sortedList.length} Total
+              {filteredList.length} / {data.allSymbols.length}
             </Badge>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex flex-wrap gap-1">
+            {TAB_CONFIG.map((tab) => {
+              const count = counts[tab.value];
+              const isActive = activeFilter === tab.value;
+
+              // Hide tabs with 0 count (except All)
+              if (count === 0 && tab.value !== 'all') return null;
+
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => setActiveFilter(tab.value)}
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-all',
+                    isActive
+                      ? tab.activeColor
+                      : `bg-secondary/50 hover:bg-secondary ${tab.color}`
+                  )}
+                >
+                  {tab.emoji && <span>{tab.emoji}</span>}
+                  {tab.label}
+                  <span
+                    className={cn(
+                      'ml-0.5 rounded px-1',
+                      isActive ? 'bg-white/20' : 'bg-black/10'
+                    )}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </CardHeader>
 
       <CardContent className="bg-card flex-1 overflow-hidden p-0">
-        {sortedList.length === 0 ? (
+        {filteredList.length === 0 ? (
           <div className="text-muted-foreground flex h-full items-center justify-center p-4 text-center text-sm italic">
-            Waiting for market data...
+            {activeFilter === 'all'
+              ? 'Waiting for market data...'
+              : `No ${TAB_CONFIG.find((t) => t.value === activeFilter)?.label} signals`}
           </div>
         ) : (
           <ScrollArea className="h-full w-full">
             <div className="flex flex-col gap-2 p-3">
-              {sortedList.map((item) => (
+              {filteredList.map((item) => (
                 <StockRow key={item.symbol} item={item} />
               ))}
             </div>

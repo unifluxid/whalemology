@@ -1,7 +1,6 @@
 import { RunningTrade } from '@/lib/stockbit-types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { analyzeTrades } from '@/lib/trade-analysis';
-import { Badge } from '@/components/ui/badge';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useMemo, useRef, useLayoutEffect } from 'react';
 import { TradeRow } from './TradeRow';
@@ -27,7 +26,7 @@ export function TradeFeed({
   onSortChange,
   onUserScroll,
 }: TradeFeedProps) {
-  const { analyzedTrades, summary } = useMemo(
+  const { analyzedTrades } = useMemo(
     () => analyzeTrades(data.data.running_trade),
     [data.data.running_trade]
   );
@@ -101,18 +100,6 @@ export function TradeFeed({
             <span className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
             Live Trade Feed
           </CardTitle>
-          {summary.dominantAction !== 'NEUTRAL' && (
-            <Badge
-              variant="outline"
-              className={`${
-                summary.dominantAction === 'ACCUMULATION'
-                  ? 'border-green-500 bg-green-500/10 text-green-400'
-                  : 'border-red-500 bg-red-500/10 text-red-400'
-              }`}
-            >
-              {summary.dominantAction} DETECTED
-            </Badge>
-          )}
         </div>
       </CardHeader>
 
