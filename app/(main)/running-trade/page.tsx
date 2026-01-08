@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuthStore } from '@/store';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
 import { ConsolidatedStockList } from '@/components/whalemology/ConsolidatedStockList';
@@ -61,9 +60,7 @@ import {
 } from '@/store/running-trade-ws-store';
 
 export default function GlobalRunningTradePage() {
-  const router = useRouter();
   const { token, user } = useAuthStore();
-  const initialLoadRef = useRef(false);
 
   // 1. Filter Hook
   const {
@@ -358,42 +355,8 @@ export default function GlobalRunningTradePage() {
     return [...baseOptions, ...extraItems];
   }, [searchKeyword, searchResults, watchlistSymbols, pendingSelectedSymbols]);
 
-  // Sync session (Keep existing logic)
-  useEffect(() => {
-    if (initialLoadRef.current) return;
-    initialLoadRef.current = true;
-
-    const syncSession = async () => {
-      if (token) return token;
-      try {
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.token) {
-            const currentUser = useAuthStore.getState().user;
-            if (currentUser) {
-              useAuthStore.getState().setAuth(data.token, currentUser);
-            } else {
-              useAuthStore.getState().setAuth(data.token, data.user);
-            }
-            return data.token;
-          }
-        }
-      } catch (e) {
-        console.error('Session sync failed', e);
-      }
-      return null;
-    };
-
-    const init = async () => {
-      const activeToken = await syncSession();
-      if (!activeToken) {
-        router.push('/login');
-      }
-    };
-
-    init();
-  }, [token, router]);
+  // Note: Auth redirects are now handled by AuthProvider
+  // Session sync is no longer needed here
 
   // Calculate order flow statistics per symbol
   const orderFlowStats = useOrderFlow({

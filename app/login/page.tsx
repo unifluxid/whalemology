@@ -53,8 +53,10 @@ export default function LoginPage() {
             data.data.login.user
           );
 
-        // Redirect to dashboard
-        router.push('/whalemology');
+        // Use replace instead of push to prevent back-button returning to login
+        // Small delay to ensure Zustand state is committed before navigation
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        router.replace('/whalemology');
       } else {
         throw new Error('Invalid response format');
       }

@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store';
 import { StockHeader } from '@/components/whalemology/StockHeader';
 import { BrokerTable } from '@/components/whalemology/BrokerTable';
@@ -30,7 +29,6 @@ interface PageProps {
 }
 
 export default function WhalemologyDashboard({ params }: PageProps) {
-  const router = useRouter();
   const { ticker } = use(params);
   const { token } = useAuthStore();
 
@@ -96,44 +94,18 @@ export default function WhalemologyDashboard({ params }: PageProps) {
     }
   };
 
+  // Fetch data when token is available
+  // AuthProvider guarantees token is hydrated before this component renders
   useEffect(() => {
-    // 1. Define the sync function to check server-side session
-    const syncSession = async (): Promise<string | null> => {
-      // If we already have a token in store, return it
-      if (token) return token;
+    if (!token) return;
 
-      try {
-        // Try to sync with server session (HTTP-Only Cookie)
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.token) {
-            // Only update token, preserve existing user data
-            const currentUser = useAuthStore.getState().user;
-            if (currentUser) {
-              // User already exists, just update token
-              useAuthStore.getState().setAuth(data.token, currentUser);
-            } else {
-              // No user data yet, use what we got (minimal)
-              useAuthStore.getState().setAuth(data.token, data.user);
-            }
-            return data.token;
-          }
-        }
-      } catch (e) {
-        console.error('Session sync failed', e);
-      }
-      return null;
-    };
-
-    // 2. Define data fetching function
-    const fetchData = async (authToken: string) => {
+    const fetchData = async () => {
       try {
         setLoading(true);
         const [info, detector, trades] = await Promise.all([
-          getEmittenInfo(ticker, authToken),
-          getMarketDetector(ticker, '2025-12-01', '2025-12-08', authToken),
-          getRunningTrade(ticker, authToken),
+          getEmittenInfo(ticker, token),
+          getMarketDetector(ticker, '2025-12-01', '2025-12-08', token),
+          getRunningTrade(ticker, token),
         ]);
 
         setData({
@@ -148,30 +120,8 @@ export default function WhalemologyDashboard({ params }: PageProps) {
       }
     };
 
-    // 3. Initialize Flow
-    const init = async () => {
-      const activeToken = await syncSession();
-      if (!activeToken) {
-        router.push('/login');
-        return;
-      }
-      // If we have a token (either from store or sync), fetch data
-      fetchData(activeToken);
-    };
-
-    init();
-  }, [ticker, token, router]);
-
-  if (!token) {
-    return (
-      <div className="bg-background text-foreground flex min-h-screen items-center justify-center">
-        <div className="flex animate-pulse flex-col items-center">
-          <div className="border-primary mb-4 h-12 w-12 animate-spin rounded-full border-4 border-t-transparent" />
-          <p className="text-muted-foreground">Authenticating...</p>
-        </div>
-      </div>
-    );
-  }
+    fetchData();
+  }, [ticker, token]);
 
   if (
     loading ||
