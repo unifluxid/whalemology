@@ -1,6 +1,40 @@
 import { TradeItem } from '@/lib/stockbit-types';
 
-export const CONSERVATIVE_WHALE_THRESHOLD = 200_000_000;
+// Tiered Whale Thresholds (in IDR)
+export const MEGA_WHALE_THRESHOLD = 500_000_000; // 500 juta - Institutional level
+export const WHALE_THRESHOLD = 200_000_000; // 200 juta - Semi-institutional
+export const DOLPHIN_THRESHOLD = 100_000_000; // 100 juta - Affluent traders / small bandar
+// Below 100 juta = Retail
+
+// Keep legacy export for backward compatibility
+export const CONSERVATIVE_WHALE_THRESHOLD = WHALE_THRESHOLD;
+
+// Tier types
+export type TradeTier = 'mega_whale' | 'whale' | 'dolphin' | 'retail';
+
+/**
+ * Determines the tier of a trade based on its value
+ */
+export function getTradeTier(value: number): TradeTier {
+  if (value >= MEGA_WHALE_THRESHOLD) return 'mega_whale';
+  if (value >= WHALE_THRESHOLD) return 'whale';
+  if (value >= DOLPHIN_THRESHOLD) return 'dolphin';
+  return 'retail';
+}
+
+/**
+ * Checks if a trade is from the same broker (buyer = seller)
+ * This could indicate broker crossing / internal matching
+ */
+export function isSameBrokerTrade(trade: TradeItem): boolean {
+  if (!trade.buyer || !trade.seller) return false;
+
+  // Extract broker code (format: "XL [D]" or "AI [A]")
+  const buyerCode = trade.buyer.split(' ')[0];
+  const sellerCode = trade.seller.split(' ')[0];
+
+  return buyerCode === sellerCode;
+}
 
 /**
  * Detects Split Whale Orders using Conservative Logic.

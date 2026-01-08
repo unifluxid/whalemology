@@ -5,11 +5,23 @@ import { TradeItem } from '@/lib/stockbit-types';
 
 import {
   detectSplitWhales,
-  CONSERVATIVE_WHALE_THRESHOLD as WHALE_THRESHOLD_VALUE,
+  getTradeTier,
+  isSameBrokerTrade,
+  MEGA_WHALE_THRESHOLD,
+  WHALE_THRESHOLD,
+  DOLPHIN_THRESHOLD,
 } from '@/lib/split-detection';
 
-// const WHALE_THRESHOLD_VALUE = 200_000_000; // Imported from lib
-const SHRIMP_THRESHOLD_VALUE = 20_000_000; // 20 Million IDR
+// Stats per tier
+export interface TierStats {
+  buyVolume: number;
+  sellVolume: number;
+  buyValue: number;
+  sellValue: number;
+  buyCount: number;
+  sellCount: number;
+  netValue: number;
+}
 
 export interface SizeBucketStats {
   buyVolume: number;
@@ -44,8 +56,20 @@ export interface SymbolOrderFlow {
   sellCount: number;
   totalCount: number;
 
-  // Bucketed stats (per symbol)
-  whaleNetValue: number;
+  // TIERED stats (per symbol) - NEW!
+  megaWhaleNetValue: number; // 🐋🐋 >= 500M
+  whaleNetValue: number; // 🐋 >= 200M
+  dolphinNetValue: number; // 🐬 >= 100M
+  retailNetValue: number; // 🦐 < 100M
+
+  // Combined whale (Mega + Whale) for backwards compatibility
+  combinedWhaleNetValue: number;
+
+  // Same-broker trades count (potential crossing)
+  sameBrokerCount: number;
+  sameBrokerValue: number;
+
+  // Legacy buckets (keeping for backward compat)
   shrimpNetValue: number;
   whaleVolume: number;
   shrimpVolume: number;
@@ -54,7 +78,6 @@ export interface SymbolOrderFlow {
   pressure: 'strong_buy' | 'buy' | 'neutral' | 'sell' | 'strong_sell';
   pressureScore: number; // -100 to +100
 
-  // Latest price info
   // Latest price info
   lastPrice: number;
   priceChange: number;
@@ -148,12 +171,22 @@ export function calculatePerSymbolOrderFlow(
     let lastPrice = 0;
     let priceChange = 0;
 
+    // TIERED tracking
+    let megaWhaleNetValue = 0;
     let whaleNetValue = 0;
+    let dolphinNetValue = 0;
+    let retailNetValue = 0;
+
+    // Legacy tracking (for backward compat)
     let shrimpNetValue = 0;
     let whaleVolume = 0;
     let shrimpVolume = 0;
     let whaleBuyValue = 0;
     let whaleBuyVolume = 0;
+
+    // Same-broker detection
+    let sameBrokerCount = 0;
+    let sameBrokerValue = 0;
 
     for (const trade of symbolTrades) {
       const lot = (trade.lotNum ?? Number(trade.lot)) || 0;
@@ -177,36 +210,67 @@ export function calculatePerSymbolOrderFlow(
         sellCount++;
       }
 
-      // Bucketing
-      // Check if it's a known Split Whale (Aggregated) OR a Single Whale
-      const isSplitWhale = splitTrades.has(trade);
+      // Same-broker detection
+      if (isSameBrokerTrade(trade)) {
+        sameBrokerCount++;
+        sameBrokerValue += value;
+      }
 
-      if (value >= WHALE_THRESHOLD_VALUE || isSplitWhale) {
+      // TIERED Bucketing
+      const tier = getTradeTier(value);
+      const isSplitWhale = splitTrades.has(trade);
+      const signedValue = isBuy ? value : -value;
+
+      // Apply to appropriate tier
+      if (
+        tier === 'mega_whale' ||
+        (isSplitWhale && value >= MEGA_WHALE_THRESHOLD)
+      ) {
+        megaWhaleNetValue += signedValue;
         whaleVolume += lot;
         if (isBuy) {
-          whaleNetValue += value;
           globalWhale.buyValue += value;
           globalWhale.buyVolume += lot;
           globalWhale.buyCount++;
-
-          // Track specific whale buy stats for VWAP
           whaleBuyValue += value;
           whaleBuyVolume += lot;
         } else {
-          whaleNetValue -= value;
           globalWhale.sellValue += value;
           globalWhale.sellVolume += lot;
           globalWhale.sellCount++;
         }
-      } else if (value <= SHRIMP_THRESHOLD_VALUE) {
+      } else if (
+        tier === 'whale' ||
+        (isSplitWhale && value >= WHALE_THRESHOLD)
+      ) {
+        whaleNetValue += signedValue;
+        whaleVolume += lot;
+        if (isBuy) {
+          globalWhale.buyValue += value;
+          globalWhale.buyVolume += lot;
+          globalWhale.buyCount++;
+          whaleBuyValue += value;
+          whaleBuyVolume += lot;
+        } else {
+          globalWhale.sellValue += value;
+          globalWhale.sellVolume += lot;
+          globalWhale.sellCount++;
+        }
+      } else if (
+        tier === 'dolphin' ||
+        (isSplitWhale && value >= DOLPHIN_THRESHOLD)
+      ) {
+        dolphinNetValue += signedValue;
+      } else {
+        // Retail tier
+        retailNetValue += signedValue;
+        shrimpNetValue += signedValue; // Legacy compat
         shrimpVolume += lot;
         if (isBuy) {
-          shrimpNetValue += value;
           globalShrimp.buyValue += value;
           globalShrimp.buyVolume += lot;
           globalShrimp.buyCount++;
         } else {
-          shrimpNetValue -= value;
           globalShrimp.sellValue += value;
           globalShrimp.sellVolume += lot;
           globalShrimp.sellCount++;
@@ -237,53 +301,53 @@ export function calculatePerSymbolOrderFlow(
     else if (pressureScore >= 10) pressure = 'buy';
     else if (pressureScore <= -30) pressure = 'strong_sell';
     else if (pressureScore <= -10) pressure = 'sell';
-    else if (pressureScore <= -10) pressure = 'sell';
     else pressure = 'neutral';
 
-    // Determine Signal based on Whale vs Shrimp Net Value
+    // Combined whale for signal detection (Mega + Whale)
+    const combinedWhaleNetValue = megaWhaleNetValue + whaleNetValue;
+
+    // Determine Signal based on Combined Whale vs Retail Net Value
     let signal: SymbolOrderFlow['signal'] = 'neutral';
     let signalScore = 0;
 
     // Strong Signal Threshold (e.g. 50M IDR divergence)
     const SIGNAL_THRESHOLD = 50_000_000;
 
-    // 1. Accumulation: Whale Buy, Shrimp Sell (Smart money collecting)
+    // 1. Accumulation: Whale Buy, Retail Sell (Smart money collecting)
     if (
-      whaleNetValue > SIGNAL_THRESHOLD &&
-      shrimpNetValue < -SIGNAL_THRESHOLD
+      combinedWhaleNetValue > SIGNAL_THRESHOLD &&
+      retailNetValue < -SIGNAL_THRESHOLD
     ) {
       signal = 'accumulation';
       signalScore = 2; // Strongest Bullish
     }
     // 2. Markup: Whale Buy, Retail Following (Strong trend)
     else if (
-      whaleNetValue > SIGNAL_THRESHOLD &&
-      shrimpNetValue > SIGNAL_THRESHOLD
+      combinedWhaleNetValue > SIGNAL_THRESHOLD &&
+      retailNetValue > SIGNAL_THRESHOLD
     ) {
       signal = 'markup';
       signalScore = 1; // Bullish continuation
     }
-    // 3. Distribution: Whale Sell, Shrimp Buy (Smart money dumping)
+    // 3. Distribution: Whale Sell, Retail Buy (Smart money dumping)
     else if (
-      whaleNetValue < -SIGNAL_THRESHOLD &&
-      shrimpNetValue > SIGNAL_THRESHOLD
+      combinedWhaleNetValue < -SIGNAL_THRESHOLD &&
+      retailNetValue > SIGNAL_THRESHOLD
     ) {
       signal = 'distribution';
       signalScore = -2; // Strongest Bearish
     }
-    // 4. Markdown/Panic: Whale Sell, Shrimp Sell (Crash)
+    // 4. Markdown/Panic: Whale Sell, Retail Sell (Crash)
     else if (
-      whaleNetValue < -SIGNAL_THRESHOLD &&
-      shrimpNetValue < -SIGNAL_THRESHOLD
+      combinedWhaleNetValue < -SIGNAL_THRESHOLD &&
+      retailNetValue < -SIGNAL_THRESHOLD
     ) {
       signal = 'markdown';
       signalScore = -1; // Bearish continuation
     }
-    // 5. Special Case: Panic Selling (Bottom Fishing)
-    // Price Drop but Whale Buying
-    else if (priceChange < 0 && whaleNetValue > SIGNAL_THRESHOLD) {
-      signal = 'accumulation'; // Bottom fishing
-      signalScore = 2;
+    // 5. Special Case: Bottom Fishing (Price Drop but Whale Buying)
+    else if (priceChange < 0 && combinedWhaleNetValue > SIGNAL_THRESHOLD) {
+      signal = 'accumulation';
       signalScore = 2;
     }
 
@@ -324,7 +388,16 @@ export function calculatePerSymbolOrderFlow(
       buyCount,
       sellCount,
       totalCount: buyCount + sellCount,
+      // TIERED stats
+      megaWhaleNetValue,
       whaleNetValue,
+      dolphinNetValue,
+      retailNetValue,
+      combinedWhaleNetValue,
+      // Same-broker
+      sameBrokerCount,
+      sameBrokerValue,
+      // Legacy
       shrimpNetValue,
       whaleVolume,
       shrimpVolume,
