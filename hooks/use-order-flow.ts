@@ -1,0 +1,454 @@
+'use client';
+
+import { useMemo } from 'react';
+import { TradeItem } from '@/lib/stockbit-types';
+
+import {
+  detectSplitWhales,
+  CONSERVATIVE_WHALE_THRESHOLD as WHALE_THRESHOLD_VALUE,
+} from '@/lib/split-detection';
+
+// const WHALE_THRESHOLD_VALUE = 200_000_000; // Imported from lib
+const SHRIMP_THRESHOLD_VALUE = 20_000_000; // 20 Million IDR
+
+export interface SizeBucketStats {
+  buyVolume: number;
+  sellVolume: number;
+  buyValue: number;
+  sellValue: number;
+  buyCount: number;
+  sellCount: number;
+  netValue: number;
+}
+
+export interface SymbolOrderFlow {
+  symbol: string;
+  // Volume stats
+  buyVolume: number;
+  sellVolume: number;
+  totalVolume: number;
+  buyPercentage: number;
+  sellPercentage: number;
+
+  // Value stats (price * volume)
+  buyValue: number;
+  sellValue: number;
+  totalValue: number;
+
+  // Delta (buy - sell)
+  volumeDelta: number; // in lots
+  valueDelta: number; // in rupiah
+
+  // Trade count
+  buyCount: number;
+  sellCount: number;
+  totalCount: number;
+
+  // Bucketed stats (per symbol)
+  whaleNetValue: number;
+  shrimpNetValue: number;
+  whaleVolume: number;
+  shrimpVolume: number;
+
+  // Pressure indicators
+  pressure: 'strong_buy' | 'buy' | 'neutral' | 'sell' | 'strong_sell';
+  pressureScore: number; // -100 to +100
+
+  // Latest price info
+  // Latest price info
+  lastPrice: number;
+  priceChange: number;
+
+  // Signal Indicators
+  signal: 'accumulation' | 'distribution' | 'markup' | 'markdown' | 'neutral';
+  signalScore: number;
+
+  // Entry Strategy
+  whaleVWAP: number;
+  bestEntryPrice: number;
+}
+
+export interface OrderFlowResult {
+  // Per-symbol data
+  hotBuying: SymbolOrderFlow[]; // Top stocks with buying pressure
+  hotSelling: SymbolOrderFlow[]; // Top stocks with selling pressure
+  allSymbols: SymbolOrderFlow[]; // All symbols sorted by absolute pressure
+
+  // Global Lists
+  topWhaleAccum: SymbolOrderFlow[]; // Top stocks bought by whales
+  topWhaleDump: SymbolOrderFlow[]; // Top stocks sold by whales
+  topShrimpAccum: SymbolOrderFlow[]; // Top stocks bought by shrimp
+  topShrimpDump: SymbolOrderFlow[]; // Top stocks sold by shrimp
+
+  // Aggregate stats
+  totalBuyVolume: number;
+  totalSellVolume: number;
+  totalBuyValue: number;
+  totalSellValue: number;
+  overallPressure: number;
+
+  // Global Buckets
+  whaleStats: SizeBucketStats;
+  shrimpStats: SizeBucketStats;
+}
+
+/**
+ * Calculate order flow statistics per symbol from trade data.
+ */
+export function calculatePerSymbolOrderFlow(
+  trades: TradeItem[]
+): OrderFlowResult {
+  const symbolMap = new Map<string, TradeItem[]>();
+
+  // Global Accumulators
+  const globalWhale: SizeBucketStats = {
+    buyVolume: 0,
+    sellVolume: 0,
+    buyValue: 0,
+    sellValue: 0,
+    buyCount: 0,
+    sellCount: 0,
+    netValue: 0,
+  };
+  const globalShrimp: SizeBucketStats = {
+    buyVolume: 0,
+    sellVolume: 0,
+    buyValue: 0,
+    sellValue: 0,
+    buyCount: 0,
+    sellCount: 0,
+    netValue: 0,
+  };
+
+  // --- SPLIT ORDER DETECTION (Conservative) ---
+  const { splitTrades } = detectSplitWhales(trades);
+
+  let totalBuyVolume = 0;
+  let totalSellVolume = 0;
+  let totalBuyValue = 0;
+  let totalSellValue = 0;
+
+  for (const trade of trades) {
+    const symbol = trade.code;
+    if (!symbolMap.has(symbol)) {
+      symbolMap.set(symbol, []);
+    }
+    symbolMap.get(symbol)!.push(trade);
+  }
+
+  const symbolStats: SymbolOrderFlow[] = [];
+
+  for (const [symbol, symbolTrades] of symbolMap) {
+    let buyVolume = 0;
+    let sellVolume = 0;
+    let buyValue = 0;
+    let sellValue = 0;
+    let buyCount = 0;
+    let sellCount = 0;
+    let lastPrice = 0;
+    let priceChange = 0;
+
+    let whaleNetValue = 0;
+    let shrimpNetValue = 0;
+    let whaleVolume = 0;
+    let shrimpVolume = 0;
+    let whaleBuyValue = 0;
+    let whaleBuyVolume = 0;
+
+    for (const trade of symbolTrades) {
+      const lot = (trade.lotNum ?? Number(trade.lot)) || 0;
+      const price = (trade.priceNum ?? Number(trade.price)) || 0;
+      const value = trade.value ?? lot * 100 * price;
+      const isBuy = trade.action === 'buy';
+
+      // Get latest price and change
+      if (lastPrice === 0) {
+        lastPrice = price;
+        priceChange = trade.changeNum ?? 0;
+      }
+
+      if (isBuy) {
+        buyVolume += lot;
+        buyValue += value;
+        buyCount++;
+      } else {
+        sellVolume += lot;
+        sellValue += value;
+        sellCount++;
+      }
+
+      // Bucketing
+      // Check if it's a known Split Whale (Aggregated) OR a Single Whale
+      const isSplitWhale = splitTrades.has(trade);
+
+      if (value >= WHALE_THRESHOLD_VALUE || isSplitWhale) {
+        whaleVolume += lot;
+        if (isBuy) {
+          whaleNetValue += value;
+          globalWhale.buyValue += value;
+          globalWhale.buyVolume += lot;
+          globalWhale.buyCount++;
+
+          // Track specific whale buy stats for VWAP
+          whaleBuyValue += value;
+          whaleBuyVolume += lot;
+        } else {
+          whaleNetValue -= value;
+          globalWhale.sellValue += value;
+          globalWhale.sellVolume += lot;
+          globalWhale.sellCount++;
+        }
+      } else if (value <= SHRIMP_THRESHOLD_VALUE) {
+        shrimpVolume += lot;
+        if (isBuy) {
+          shrimpNetValue += value;
+          globalShrimp.buyValue += value;
+          globalShrimp.buyVolume += lot;
+          globalShrimp.buyCount++;
+        } else {
+          shrimpNetValue -= value;
+          globalShrimp.sellValue += value;
+          globalShrimp.sellVolume += lot;
+          globalShrimp.sellCount++;
+        }
+      }
+    }
+
+    const symbolTotalVolume = buyVolume + sellVolume;
+    const symbolTotalValue = buyValue + sellValue;
+
+    // Skip symbols with no volume
+    if (symbolTotalVolume === 0) continue;
+
+    const buyPercentage = (buyVolume / symbolTotalVolume) * 100;
+    const sellPercentage = (sellVolume / symbolTotalVolume) * 100;
+    const volumeDelta = buyVolume - sellVolume;
+    const valueDelta = buyValue - sellValue;
+
+    // Calculate pressure score
+    const volumeScore = (volumeDelta / symbolTotalVolume) * 100;
+    const valueScore =
+      symbolTotalValue > 0 ? (valueDelta / symbolTotalValue) * 100 : 0;
+    const pressureScore = Math.round((volumeScore + valueScore) / 2);
+
+    // Determine pressure level
+    let pressure: SymbolOrderFlow['pressure'];
+    if (pressureScore >= 30) pressure = 'strong_buy';
+    else if (pressureScore >= 10) pressure = 'buy';
+    else if (pressureScore <= -30) pressure = 'strong_sell';
+    else if (pressureScore <= -10) pressure = 'sell';
+    else if (pressureScore <= -10) pressure = 'sell';
+    else pressure = 'neutral';
+
+    // Determine Signal based on Whale vs Shrimp Net Value
+    let signal: SymbolOrderFlow['signal'] = 'neutral';
+    let signalScore = 0;
+
+    // Strong Signal Threshold (e.g. 50M IDR divergence)
+    const SIGNAL_THRESHOLD = 50_000_000;
+
+    // 1. Accumulation: Whale Buy, Shrimp Sell (Smart money collecting)
+    if (
+      whaleNetValue > SIGNAL_THRESHOLD &&
+      shrimpNetValue < -SIGNAL_THRESHOLD
+    ) {
+      signal = 'accumulation';
+      signalScore = 2; // Strongest Bullish
+    }
+    // 2. Markup: Whale Buy, Retail Following (Strong trend)
+    else if (
+      whaleNetValue > SIGNAL_THRESHOLD &&
+      shrimpNetValue > SIGNAL_THRESHOLD
+    ) {
+      signal = 'markup';
+      signalScore = 1; // Bullish continuation
+    }
+    // 3. Distribution: Whale Sell, Shrimp Buy (Smart money dumping)
+    else if (
+      whaleNetValue < -SIGNAL_THRESHOLD &&
+      shrimpNetValue > SIGNAL_THRESHOLD
+    ) {
+      signal = 'distribution';
+      signalScore = -2; // Strongest Bearish
+    }
+    // 4. Markdown/Panic: Whale Sell, Shrimp Sell (Crash)
+    else if (
+      whaleNetValue < -SIGNAL_THRESHOLD &&
+      shrimpNetValue < -SIGNAL_THRESHOLD
+    ) {
+      signal = 'markdown';
+      signalScore = -1; // Bearish continuation
+    }
+    // 5. Special Case: Panic Selling (Bottom Fishing)
+    // Price Drop but Whale Buying
+    else if (priceChange < 0 && whaleNetValue > SIGNAL_THRESHOLD) {
+      signal = 'accumulation'; // Bottom fishing
+      signalScore = 2;
+      signalScore = 2;
+    }
+
+    // Calculate Whale VWAP and Best Entry
+    let whaleVWAP = 0;
+    let bestEntryPrice = 0;
+
+    if (whaleBuyVolume > 0) {
+      // VWAP = Total Value / Total Volume / 100 (shares per lot)
+      whaleVWAP = Math.round(whaleBuyValue / (whaleBuyVolume * 100));
+
+      // Strategy:
+      // Markup (Strong Uptrend) -> Entry at VWAP
+      // Accumulation (Collecting) -> Entry slightly below VWAP (bargain hunting)
+      if (signal === 'markup') {
+        bestEntryPrice = whaleVWAP;
+      } else if (signal === 'accumulation') {
+        // 1-2 ticks below VWAP (approx 1%)
+        bestEntryPrice = Math.round(whaleVWAP * 0.99);
+      } else {
+        // Default to VWAP if neutral but whale buying exists
+        bestEntryPrice = whaleVWAP;
+      }
+    }
+
+    symbolStats.push({
+      symbol,
+      buyVolume,
+      sellVolume,
+      totalVolume: symbolTotalVolume,
+      buyPercentage,
+      sellPercentage,
+      buyValue,
+      sellValue,
+      totalValue: symbolTotalValue,
+      volumeDelta,
+      valueDelta,
+      buyCount,
+      sellCount,
+      totalCount: buyCount + sellCount,
+      whaleNetValue,
+      shrimpNetValue,
+      whaleVolume,
+      shrimpVolume,
+      pressure,
+      pressureScore,
+      lastPrice,
+      priceChange,
+      signal,
+      signalScore,
+      whaleVWAP,
+      bestEntryPrice,
+    });
+
+    totalBuyVolume += buyVolume;
+    totalSellVolume += sellVolume;
+    totalBuyValue += buyValue;
+    totalSellValue += sellValue;
+  }
+
+  // Calculate global nets
+  globalWhale.netValue = globalWhale.buyValue - globalWhale.sellValue;
+  globalShrimp.netValue = globalShrimp.buyValue - globalShrimp.sellValue;
+
+  // Sort and split into hot buying and hot selling
+  const hotBuying = symbolStats
+    .filter((s) => s.pressureScore > 0)
+    .sort((a, b) => b.pressureScore - a.pressureScore)
+    .slice(0, 15);
+
+  const hotSelling = symbolStats
+    .filter((s) => s.pressureScore < 0)
+    .sort((a, b) => a.pressureScore - b.pressureScore)
+    .slice(0, 15);
+
+  const allSymbols = [...symbolStats].sort(
+    (a, b) => Math.abs(b.pressureScore) - Math.abs(a.pressureScore)
+  );
+
+  // Top Lists
+  const topWhaleAccum = symbolStats
+    .filter((s) => s.whaleNetValue > 0)
+    .sort((a, b) => b.whaleNetValue - a.whaleNetValue)
+    .slice(0, 10);
+  const topWhaleDump = symbolStats
+    .filter((s) => s.whaleNetValue < 0)
+    .sort((a, b) => a.whaleNetValue - b.whaleNetValue)
+    .slice(0, 10); // Most negative first (ascending)
+  const topShrimpAccum = symbolStats
+    .filter((s) => s.shrimpNetValue > 0)
+    .sort((a, b) => b.shrimpNetValue - a.shrimpNetValue)
+    .slice(0, 10);
+  const topShrimpDump = symbolStats
+    .filter((s) => s.shrimpNetValue < 0)
+    .sort((a, b) => a.shrimpNetValue - b.shrimpNetValue)
+    .slice(0, 10);
+
+  const overallTotal = totalBuyVolume + totalSellVolume;
+  const overallPressure =
+    overallTotal > 0
+      ? Math.round(((totalBuyVolume - totalSellVolume) / overallTotal) * 100)
+      : 0;
+
+  return {
+    hotBuying,
+    hotSelling,
+    allSymbols,
+    topWhaleAccum,
+    topWhaleDump,
+    topShrimpAccum,
+    topShrimpDump,
+    totalBuyVolume,
+    totalSellVolume,
+    totalBuyValue,
+    totalSellValue,
+    overallPressure,
+    whaleStats: globalWhale,
+    shrimpStats: globalShrimp,
+  };
+}
+
+interface UseOrderFlowProps {
+  trades: TradeItem[] | null;
+}
+
+/**
+ * Hook for calculating real-time per-symbol order flow statistics.
+ */
+export function useOrderFlow({ trades }: UseOrderFlowProps): OrderFlowResult {
+  return useMemo(() => {
+    if (!trades || trades.length === 0) {
+      return {
+        hotBuying: [],
+        hotSelling: [],
+        allSymbols: [],
+        topWhaleAccum: [],
+        topWhaleDump: [],
+        topShrimpAccum: [],
+        topShrimpDump: [],
+        totalBuyVolume: 0,
+        totalSellVolume: 0,
+        totalBuyValue: 0,
+        totalSellValue: 0,
+        overallPressure: 0,
+        whaleStats: {
+          buyVolume: 0,
+          sellVolume: 0,
+          buyValue: 0,
+          sellValue: 0,
+          buyCount: 0,
+          sellCount: 0,
+          netValue: 0,
+        },
+        shrimpStats: {
+          buyVolume: 0,
+          sellVolume: 0,
+          buyValue: 0,
+          sellValue: 0,
+          buyCount: 0,
+          sellCount: 0,
+          netValue: 0,
+        },
+      };
+    }
+
+    return calculatePerSymbolOrderFlow(trades);
+  }, [trades]);
+}

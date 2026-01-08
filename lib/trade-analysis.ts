@@ -1,5 +1,7 @@
 import { TradeItem } from './stockbit-types';
 import { ANALYSIS_CONFIG } from './analysis-config';
+import { detectSplitWhales } from './split-detection';
+import { detectWhales } from './whale-detection';
 
 // ----------------------------------------------------------------------
 // Interfaces
@@ -25,9 +27,16 @@ export interface TradeAnalysisSummary {
   splitIntensityScore: number;
 }
 
+// Structured reason item (no HTML in data layer)
+export interface AnomalyReason {
+  type: 'whale' | 'split';
+  count: number;
+  value?: number; // For split orders
+}
+
 export interface StockAnomaly {
   symbol: string;
-  reasons: string[];
+  reasons: AnomalyReason[];
   averagePrice: number;
   averageLot: number;
   totalVolume: number;
@@ -37,9 +46,8 @@ export interface StockAnomaly {
   totalSplitValue: number;
   splitIntensityScore: number;
   topBrokers: Array<{ broker: string; count: number; action: string }>;
-  dominantAction: 'ACCUMULATION' | 'DISTRIBUTION';
+  dominantAction: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL';
   lastUpdate: string;
-  confidenceScore: number;
 }
 
 export interface AggregateStockAnomaliesOptions {
@@ -74,14 +82,20 @@ export function enrichTrade(trade: TradeItem): TradeItem {
   const value = priceNum * lotNum * 100; // Indonesian stocks usually 1 lot = 100 shares
 
   // Parse change string "+1.5%" or "-0.5%" to number
-  // Optimized: check length before regex
   let changeNum = 0;
   if (trade.change) {
     const changeClean = trade.change.replace('%', '').replace('+', '');
     changeNum = parseFloat(changeClean) || 0;
   }
 
-  return { ...trade, lotNum, priceNum, value, changeNum };
+  // Cache parsed time as seconds for time decay calculations
+  let seconds = 0;
+  if (trade.time) {
+    const [h, m, s] = trade.time.split(':').map(Number);
+    seconds = h * 3600 + m * 60 + s;
+  }
+
+  return { ...trade, lotNum, priceNum, value, changeNum, seconds };
 }
 
 /**
@@ -103,59 +117,6 @@ function classifyTradePattern(
     // For now, to keep it simple and consistent with previous UI:
     return 'DISTRIBUTION';
   }
-}
-
-/**
- * Calculates a confidence score (1-6) based on anomaly severity.
- */
-export function calculateConfidenceScore(anomaly: StockAnomaly): number {
-  let score = 0;
-  const {
-    CONFIDENCE_WHALE_HIGH_VALUE,
-    CONFIDENCE_SPLIT_HIGH_VALUE,
-    CONFIDENCE_SPLIT_MEDIUM_VALUE,
-  } = ANALYSIS_CONFIG;
-
-  // Factor 1: Whale Intensity
-  if (anomaly.whaleCount >= 3) {
-    score += 2;
-    const avgWhaleValue =
-      anomaly.whaleCount > 0 ? anomaly.totalValue / anomaly.whaleCount : 0;
-    if (avgWhaleValue > CONFIDENCE_WHALE_HIGH_VALUE) score += 1;
-  } else if (anomaly.whaleCount >= 1) {
-    score += 1;
-    if (anomaly.totalValue >= 500_000_000) score += 0.5;
-  }
-
-  // Factor 2: Split Order Intensity
-  if (anomaly.totalSplitValue >= CONFIDENCE_SPLIT_HIGH_VALUE) {
-    score += 2;
-  } else if (anomaly.totalSplitValue >= CONFIDENCE_SPLIT_MEDIUM_VALUE) {
-    score += 1.5;
-  } else if (
-    anomaly.splitOrderCount >= 2 &&
-    anomaly.totalSplitValue >= 100_000_000
-  ) {
-    score += 1;
-  } else if (
-    anomaly.splitOrderCount >= 1 &&
-    anomaly.totalSplitValue >= 50_000_000
-  ) {
-    score += 0.5;
-  }
-
-  // Factor 3: Broker Concentration
-  if (anomaly.topBrokers.length > 0) {
-    const totalEvents = anomaly.topBrokers.reduce((sum, b) => sum + b.count, 0);
-    if (totalEvents > 0) {
-      const maxShare = anomaly.topBrokers[0].count / totalEvents;
-      if (maxShare >= 0.5) {
-        score += 1; // Dominant broker
-      }
-    }
-  }
-
-  return Math.min(Math.max(Math.round(score + 1), 1), 6);
 }
 
 // ----------------------------------------------------------------------
@@ -187,14 +148,11 @@ export function analyzeTrades(trades: TradeItem[]): {
   }
 
   const {
-    WHALE_SINGLE_TRADE_THRESHOLD,
-    WHALE_GROUPED_TRADE_THRESHOLD,
     MIN_SIGNIFICANT_VALUE,
-    SPLIT_ORDER_THRESHOLD,
-    MIN_SPLIT_TOTAL_VALUE,
     TIME_DECAY_HALF_LIFE,
     MIN_TOTAL_SCORE,
     IMBALANCE_THRESHOLD,
+    ABSORPTION_MIN_VALUE,
   } = ANALYSIS_CONFIG;
 
   // 1. Single Pass: Enrich, Time Grouping, Total Volume
@@ -215,10 +173,8 @@ export function analyzeTrades(trades: TradeItem[]): {
     enrichedList.push(t);
     totalVolume += t.lotNum!;
 
-    // Time decay calculation prep
-    const [h, m, s] = t.time.split(':').map(Number);
-    const secs = h * 3600 + m * 60 + s;
-    if (secs > maxSeconds) maxSeconds = secs;
+    // Use cached seconds from enrichTrade
+    if (t.seconds! > maxSeconds) maxSeconds = t.seconds!;
 
     // Grouping for detection
     let group = timeInfoMap.get(t.time);
@@ -236,104 +192,37 @@ export function analyzeTrades(trades: TradeItem[]): {
       ? enrichedList.reduce((sum, t) => sum + t.value!, 0) / enrichedList.length
       : 0;
 
-  const {
-    RELATIVE_WHALE_MULTIPLIER,
-    MIN_RELATIVE_WHALE_ABSOLUTE_VALUE,
-    ABSORPTION_MIN_VALUE,
-  } = ANALYSIS_CONFIG;
+  // --- Detect if broker data is available (market closed) or not (market open) ---
+  // When market is open, buyer/seller are empty due to regulation
+  // When market is closed, broker data becomes available
+  // const hasBrokerData = enrichedList.some(
+  //   (t) => (t.buyer && t.buyer !== '') || (t.seller && t.seller !== '')
+  // );
 
   // 2. Detection (Whale & Split)
   // ----------------------------
   // We will store detection results in Sets/Maps keyed by trade ID or Index to allow O(1) lookup.
   // Since we don't have unique stable IDs for all trades guaranteed, we'll use object reference (Set<TradeItem>)
-  const whaleTrades = new Set<TradeItem>();
-  const splitTrades = new Set<TradeItem>();
+  // 2. Detection (Whale & Split & Shrimp)
+  // -------------------------------------
 
-  let whaleCount = 0; // Number of unique "whale events" (single or group)
-  let splitOrderCount = 0; // Number of unique "split events"
-  let totalSplitValue = 0;
-  let splitIntensityScore = 0;
+  // A. Detect Split Whales (Aggregated)
+  const {
+    splitTrades,
+    splitEventCount: splitOrderCount,
+    totalSplitValue,
+    splitIntensityScore,
+  } = detectSplitWhales(enrichedList);
 
-  // Iterate over time groups
-  for (const groupTrades of timeInfoMap.values()) {
-    // Sub-grouping for detection logic
-    // We need to group by:
-    // - Whale: Side + Broker
-    // - Split: Side + Broker (and conceptually Price, though we allow sweeping)
+  // B. Detect Single Whales (Obvious)
+  const { whaleTrades, whaleCount } = detectWhales(
+    enrichedList,
+    averageTradeValue
+  );
 
-    // Key: "Side|Broker", Value: List of trades
-    const subGroups = new Map<string, TradeItem[]>();
-
-    // 1.a Detect Single Whales immediately & build subgroups
-    for (const t of groupTrades) {
-      // Logic 1: Absolute Whale
-      if (t.value! >= WHALE_SINGLE_TRADE_THRESHOLD) {
-        if (!whaleTrades.has(t)) {
-          whaleTrades.add(t);
-          whaleCount++; // A single trade is 1 event
-        }
-      }
-      // Logic 2: Relative Whale (Local Whale)
-      else if (
-        t.value! >= MIN_RELATIVE_WHALE_ABSOLUTE_VALUE &&
-        t.value! >= averageTradeValue * RELATIVE_WHALE_MULTIPLIER
-      ) {
-        if (!whaleTrades.has(t)) {
-          whaleTrades.add(t);
-          whaleCount++;
-        }
-      }
-
-      const side = t.action;
-      const broker =
-        side === 'buy' ? t.buyer || 'UNKNOWN' : t.seller || 'UNKNOWN';
-      const key = `${side}|${broker}`;
-
-      let subList = subGroups.get(key);
-      if (!subList) {
-        subList = [];
-        subGroups.set(key, subList);
-      }
-      subList.push(t);
-    }
-
-    // 1.b Detect Grouped Whales & Split Orders from subgroups
-    for (const trades of subGroups.values()) {
-      const count = trades.length;
-      if (count <= 0) continue;
-
-      const totalValue = trades.reduce((sum, t) => sum + t.value!, 0);
-
-      // --- Grouped Whale Check ---
-      // Check if not already counted as single whales?
-      // Actually, if a group forms a whale event, all trades inside are whale trades.
-      // If sum > threshold and count > 1
-      if (count > 1 && totalValue >= WHALE_GROUPED_TRADE_THRESHOLD) {
-        // This is a grouped whale event
-        whaleCount++;
-        for (const t of trades) {
-          whaleTrades.add(t);
-        }
-      }
-
-      // --- Split Order Check ---
-      // Logic: High frequency (count > threshold) AND significant value
-      if (count > SPLIT_ORDER_THRESHOLD) {
-        if (totalValue >= MIN_SPLIT_TOTAL_VALUE) {
-          splitOrderCount++;
-          totalSplitValue += totalValue;
-
-          // Intensity score
-          const intensityWeight = Math.log(1 + totalValue / 10_000_000);
-          splitIntensityScore += totalValue * intensityWeight;
-
-          for (const t of trades) {
-            splitTrades.add(t);
-          }
-        }
-      }
-    }
-  }
+  // C. Detect Shrimps (The Rest)
+  // implicit, but we can verify consistency if needed
+  // const { shrimpTrades } = detectShrimps(enrichedList, whaleTrades, splitTrades);
 
   // 3. Scoring & Final Analysis Construction
   // ----------------------------------------
@@ -343,16 +232,14 @@ export function analyzeTrades(trades: TradeItem[]): {
   for (const t of enrichedList) {
     const isWhale = whaleTrades.has(t);
     const isSplit = splitTrades.has(t);
+    // Optional: Explicit consistency check
+    // const isShrimp = shrimpTrades.has(t);
 
     const isSignificant =
       (isWhale || isSplit) && t.value! >= MIN_SIGNIFICANT_VALUE;
 
-    // Calculate time decay
-    // Re-calculate seconds here or store it on enriched?
-    // Optimization: Calculate once.
-    const [h, m, s] = t.time.split(':').map(Number);
-    const tSecs = h * 3600 + m * 60 + s;
-    const ageMinutes = (maxSeconds - tSecs) / 60;
+    // Calculate time decay using cached seconds
+    const ageMinutes = (maxSeconds - t.seconds!) / 60;
     const timeWeight = Math.exp(
       (-ageMinutes * Math.LN2) / TIME_DECAY_HALF_LIFE
     );
@@ -451,37 +338,32 @@ export function aggregateStockAnomalies(
   for (const [symbol, stockTrades] of stocksMap.entries()) {
     const { analyzedTrades, summary } = analyzeTrades(stockTrades);
 
-    // Filter out uninteresting stocks
-    if (
-      summary.whaleCount === 0 &&
-      summary.splitOrderCount === 0 &&
-      summary.dominantAction === 'NEUTRAL'
-    ) {
+    // Filter out stocks that won't be displayed:
+    // 1. NEUTRAL dominant action (AnomalyCard only shows ACCUMULATION/DISTRIBUTION)
+    // 2. No whale or split activity
+    if (summary.dominantAction === 'NEUTRAL') {
+      continue;
+    }
+    if (summary.whaleCount === 0 && summary.splitOrderCount === 0) {
       continue;
     }
 
     // --- Build Anomaly Object ---
 
-    // 1. Reasons HTML
-    const reasons: string[] = [];
+    // 1. Structured Reasons (no HTML in data layer)
+    const reasons: AnomalyReason[] = [];
     if (summary.whaleCount > 0) {
-      reasons.push(
-        `🐋 <span class="text-foreground font-semibold">${summary.whaleCount}</span> whale trade${summary.whaleCount > 1 ? 's' : ''}`
-      );
+      reasons.push({
+        type: 'whale',
+        count: summary.whaleCount,
+      });
     }
     if (summary.splitOrderCount > 0) {
-      let formattedValue = '';
-      if (summary.totalSplitValue >= 1_000_000_000) {
-        formattedValue = `${(summary.totalSplitValue / 1_000_000_000).toFixed(1)}B`;
-      } else if (summary.totalSplitValue >= 1_000_000) {
-        formattedValue = `${(summary.totalSplitValue / 1_000_000).toFixed(0)}M`;
-      } else {
-        formattedValue = `${(summary.totalSplitValue / 1_000).toFixed(0)}K`;
-      }
-
-      reasons.push(
-        `🧩 <span class="text-foreground font-semibold">${summary.splitOrderCount}</span> split order${summary.splitOrderCount > 1 ? 's' : ''} (~${formattedValue})`
-      );
+      reasons.push({
+        type: 'split',
+        count: summary.splitOrderCount,
+        value: summary.totalSplitValue,
+      });
     }
 
     // 2. Stats
@@ -501,54 +383,66 @@ export function aggregateStockAnomalies(
     const averageLot = count > 0 ? totalLots / count : 0;
     const averagePrice = totalLots > 0 ? totalPriceVolume / totalLots : 0;
 
-    // 3. Top Brokers
-    const brokerStats = new Map<string, { count: number; action: string }>();
+    // 3. Top Brokers (only when broker data is available)
+    let finalBrokers: Array<{ broker: string; count: number; action: string }> =
+      [];
 
-    // Only analyze brokers from significant events (Whale or Split)
-    const significantTrades = analyzedTrades.filter(
-      (t) => t.analysis.isWhale || t.analysis.isSplitOrder
+    // Check if broker data is available (market closed)
+    const hasBrokerData = stockTrades.some(
+      (t) => (t.buyer && t.buyer !== '') || (t.seller && t.seller !== '')
     );
 
-    for (const t of significantTrades) {
-      const side = t.action;
-      const tBroker = side === 'buy' ? t.buyer : t.seller;
-      const brokerName = tBroker || 'UNKNOWN';
+    if (hasBrokerData) {
+      const brokerStats = new Map<string, { count: number; action: string }>();
 
-      let entry = brokerStats.get(brokerName);
-      if (!entry) {
-        entry = { count: 0, action: t.action };
-        brokerStats.set(brokerName, entry);
+      // Only analyze brokers from significant events (Whale or Split)
+      const significantTrades = analyzedTrades.filter(
+        (t) => t.analysis.isWhale || t.analysis.isSplitOrder
+      );
+
+      for (const t of significantTrades) {
+        const side = t.action;
+        const tBroker = side === 'buy' ? t.buyer : t.seller;
+        if (!tBroker) continue; // Skip empty broker
+
+        let entry = brokerStats.get(tBroker);
+        if (!entry) {
+          entry = { count: 0, action: t.action };
+          brokerStats.set(tBroker, entry);
+        }
+        entry.count++;
       }
-      entry.count++;
+
+      const sortedBrokers = Array.from(brokerStats.entries())
+        .map(([broker, data]) => ({ broker, ...data }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3);
+
+      // Apply strict privacy masking
+      finalBrokers = sortedBrokers.map((entry, idx) => {
+        let displayName = entry.broker;
+
+        // Mask if forced by option OR if broker is marked as hidden
+        let shouldMask = hideBrokerNames;
+
+        if (!shouldMask) {
+          const significantTrades = analyzedTrades.filter(
+            (t) => t.analysis.isWhale || t.analysis.isSplitOrder
+          );
+          const hasHiddenBroker = significantTrades.some((t) => {
+            const tBroker = t.action === 'buy' ? t.buyer : t.seller;
+            return tBroker === entry.broker && !t.is_broker_exists;
+          });
+          if (hasHiddenBroker) shouldMask = true;
+        }
+
+        if (shouldMask) {
+          displayName = `BROKER_${idx + 1}`;
+        }
+
+        return { ...entry, broker: displayName };
+      });
     }
-
-    const sortedBrokers = Array.from(brokerStats.entries())
-      .map(([broker, data]) => ({ broker, ...data }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3);
-
-    // Apply strict privacy masking
-    const finalBrokers = sortedBrokers.map((entry, idx) => {
-      let displayName = entry.broker;
-
-      // Mask if forced by option OR if checks fail
-      let shouldMask = hideBrokerNames;
-
-      if (!shouldMask) {
-        // Check if any significant trade with this broker has is_broker_exists = false
-        const hasHiddenBroker = significantTrades.some((t) => {
-          const tBroker = t.action === 'buy' ? t.buyer : t.seller;
-          return tBroker === entry.broker && !t.is_broker_exists;
-        });
-        if (hasHiddenBroker) shouldMask = true;
-      }
-
-      if (shouldMask) {
-        displayName = `BROKER_${idx + 1}`;
-      }
-
-      return { ...entry, broker: displayName };
-    });
 
     // 4. Last Update
     // Efficient max finding
@@ -576,12 +470,10 @@ export function aggregateStockAnomalies(
       totalSplitValue: summary.totalSplitValue,
       splitIntensityScore: summary.splitIntensityScore,
       topBrokers: finalBrokers,
-      dominantAction: summary.dominantAction as 'ACCUMULATION' | 'DISTRIBUTION',
+      dominantAction: summary.dominantAction,
       lastUpdate,
-      confidenceScore: 0,
     };
 
-    anomalyObj.confidenceScore = calculateConfidenceScore(anomalyObj);
     anomalies.push(anomalyObj);
   }
 

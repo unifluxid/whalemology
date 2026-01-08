@@ -1,18 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore, useConfigStore } from '@/store';
+import { useAuthStore } from '@/store';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
-import { AnomalyCard } from '@/components/whalemology/AnomalyCard';
+import { ConsolidatedStockList } from '@/components/whalemology/ConsolidatedStockList';
 import { FilterPopover } from '@/components/whalemology/FilterPopover';
 import { getWatchlistSymbols } from '@/lib/stockbit-data';
+import { featureFlags } from '@/lib/feature-flags';
 import { WatchlistSymbol } from '@/lib/stockbit-types';
-import { aggregateStockAnomalies } from '@/lib/trade-analysis';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+// Duplicate Select imports removed
 import {
   Popover,
   PopoverContent,
@@ -31,18 +33,18 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import {
+  useMockScenarios,
+  SCENARIO_OPTIONS,
+  type ScenarioType,
+} from '@/hooks/use-mock-scenarios';
+import {
   MultiSelect,
   MultiSelectContent,
   MultiSelectItem,
   MultiSelectTrigger,
   MultiSelectValue,
 } from '@/components/ui/multi-select';
-import {
-  Calendar as CalendarIcon,
-  TrendingUp,
-  DollarSign,
-  Star,
-} from 'lucide-react';
+import { Calendar as CalendarIcon, Star, Play, Pause } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -50,14 +52,18 @@ import { cn } from '@/lib/utils';
 import { useTradeFilters } from '@/hooks/use-trade-filters';
 import { useSymbolSearch } from '@/hooks/use-symbol-search';
 import { useRunningTrades } from '@/hooks/use-running-trades';
+import { useRunningTradeWS } from '@/hooks/use-running-trade-ws';
+import { useOrderFlow } from '@/hooks/use-order-flow';
+import useDatafeedSocket from '@/lib/datafeed/useDatafeedSocket';
+import {
+  useRunningTradeStore,
+  StockFilterTypeEnum,
+} from '@/store/running-trade-ws-store';
 
 export default function GlobalRunningTradePage() {
   const router = useRouter();
   const { token, user } = useAuthStore();
   const initialLoadRef = useRef(false);
-
-  // Config from store
-  const { pollInterval } = useConfigStore();
 
   // 1. Filter Hook
   const {
@@ -82,12 +88,7 @@ export default function GlobalRunningTradePage() {
     sortOrder,
     selectedSymbols,
     setSelectedSymbols,
-    minConfidenceScore,
-    setMinConfidenceScore,
-    minTotalValue,
-    setMinTotalValue,
-    showOnlyWhales,
-    setShowOnlyWhales,
+
     // Actions
     resetFilters,
     handleSortChange,
@@ -101,12 +102,142 @@ export default function GlobalRunningTradePage() {
   const { searchKeyword, setSearchKeyword, searchResults } =
     useSymbolSearch(token);
 
-  // 3. Trade Data Hook
-  const { data, loading, loadingMore, handleLoadMore } = useRunningTrades({
+  // 3. Trade Data Hook (REST - used as fallback and initial data)
+  const {
+    data: restData,
+    loading,
+    loadingMore,
+    handleLoadMore,
+    refetch,
+    appendTrades,
+  } = useRunningTrades({
     token,
     filters: apiFilters,
-    pollInterval,
   });
+
+  // 4. WebSocket connection status
+  const { isAuthorized } = useDatafeedSocket();
+
+  // 5. Running trade store for pause/play
+  const isPaused = useRunningTradeStore(
+    (state) => state.instances.widget.isPaused
+  );
+  const pauseWS = useRunningTradeStore((state) => state.pause);
+  const playWS = useRunningTradeStore((state) => state.play);
+  const setStock = useRunningTradeStore((state) => state.setStock);
+
+  // Determine if market is open based on REST data
+  const isOpenMarket = useMemo(() => {
+    return restData?.data?.is_open_market ?? false;
+  }, [restData]);
+
+  // 6. WebSocket Trade Data Hook
+  const { data: wsData } = useRunningTradeWS({
+    rtKey: 'widget',
+    isOpenMarket: isOpenMarket && isAuthorized,
+  });
+
+  // 5. Data Unification (Rest + WS)
+  // restData comes from useRunningTrades which reads from the store.
+  // The store is updated by WS data via appendTrades in useEffect below.
+  // So restData is the single source of truth for the UI.
+  const liveData = restData;
+
+  // 6. Simulation Mode Logic
+  const [scenario, setScenario] = useState<ScenarioType>('live');
+  const mockData = useMockScenarios(scenario);
+
+  const rawData = useMemo(() => {
+    return scenario === 'live' ? liveData : mockData;
+  }, [scenario, liveData, mockData]);
+
+  // Handle load more only for live mode
+  const handleActiveLoadMore =
+    scenario === 'live' ? handleLoadMore : async () => {};
+  const isActiveLoadingMore = scenario === 'live' ? loadingMore : false;
+
+  // Sync symbols to WS store when selectedSymbols change
+  useEffect(() => {
+    setStock('widget', {
+      type:
+        selectedSymbols.length > 0
+          ? StockFilterTypeEnum.Custom
+          : StockFilterTypeEnum.AllStock,
+      selected: selectedSymbols.length > 0 ? selectedSymbols : ['*'],
+    });
+  }, [selectedSymbols, setStock]);
+
+  // Get setFilter from WS store
+  const setWsFilter = useRunningTradeStore((state) => state.setFilter);
+
+  // Sync REST API filters to WS store for client-side filtering
+  // This ensures WS data is filtered the same way as REST data
+  useEffect(() => {
+    const wsFilter = {
+      actionType:
+        actionTypeFilter === 'buy'
+          ? 'BUY'
+          : actionTypeFilter === 'sell'
+            ? 'SELL'
+            : null,
+      marketBoard:
+        marketBoard === 'all'
+          ? null
+          : marketBoard === 'regular'
+            ? 'RG'
+            : marketBoard === 'cash'
+              ? 'TN'
+              : marketBoard === 'negotiation'
+                ? 'NG'
+                : null,
+      minPrice: priceRangeFrom > 0 ? priceRangeFrom : null,
+      maxPrice: priceRangeTo > 0 ? priceRangeTo : null,
+      minLot: minimumLot > 0 ? minimumLot : null,
+    } as const;
+
+    setWsFilter('widget', wsFilter);
+  }, [
+    actionTypeFilter,
+    marketBoard,
+    priceRangeFrom,
+    priceRangeTo,
+    minimumLot,
+    setWsFilter,
+  ]);
+
+  // Use WebSocket when available and market is open
+  const useWebSocket =
+    isOpenMarket && isAuthorized && !isPaused && wsData.length > 0;
+
+  // Final data: always use restData (unified store)
+  // Final data: always use restData (unified store)
+  // const data = restData; // Removed
+
+  // 7. Merge WebSocket trades into unified store
+  useEffect(() => {
+    if (!useWebSocket || wsData.length === 0) return;
+
+    // WS data is already normalized to TradeItem format by the hook
+    appendTrades(wsData, apiFilters);
+  }, [wsData, useWebSocket, appendTrades, apiFilters]);
+
+  // Auto-pause when user scrolls (like Stockbit)
+  const handleUserScroll = useCallback(() => {
+    if (!isPaused && isOpenMarket) {
+      pauseWS('widget');
+    }
+  }, [isPaused, isOpenMarket, pauseWS]);
+
+  // Pause/Play handlers
+  const handlePausePlay = useCallback(async () => {
+    if (isPaused) {
+      // Fetch fresh data before resuming to fill the gap
+      await refetch();
+      playWS('widget');
+    } else {
+      pauseWS('widget');
+    }
+  }, [isPaused, playWS, pauseWS, refetch]);
 
   // Load watchlist symbols on mount (keep this logic here as it interacts with auth & selected symbols)
   // We could extract another hook `useWatchlist` but this is acceptable for now.
@@ -168,6 +299,7 @@ export default function GlobalRunningTradePage() {
   const [pendingSelectedSymbols, setPendingSelectedSymbols] =
     useState<string[]>(selectedSymbols);
   const [isMultiSelectOpen, setIsMultiSelectOpen] = useState(false);
+  const [isDateOpen, setIsDateOpen] = useState(false);
 
   // Sync pending with real when opening, AND when real changes externally (e.g. from watchlist toggle or initial load)
   useEffect(() => {
@@ -263,41 +395,31 @@ export default function GlobalRunningTradePage() {
     init();
   }, [token, router]);
 
-  // Compute anomalies (Client-side filtering)
-  const anomalies = useMemo(() => {
-    // If data is null, the store might be empty or loading.
-    // aggregateStockAnomalies() will pull from store directly.
-    // However, we rely on 'data' change to re-trigger memo.
-    // Ideally we should subscribe to store changes if 'data' wasn't passed as prop/hook result.
-    // But 'data' comes from useRunningTrades hook which subscribes to store.
-    // So 'data' changing means store changed.
-    if (!data) return [];
-
-    // We pass trades explicitly now
-    const allAnomalies = aggregateStockAnomalies(data.data.running_trade);
-
-    return allAnomalies.filter((anomaly) => {
-      if (anomaly.confidenceScore < minConfidenceScore) return false;
-      if (anomaly.totalValue < minTotalValue) return false;
-      if (showOnlyWhales && anomaly.whaleCount === 0) return false;
-      return true;
-    });
-  }, [data, minConfidenceScore, minTotalValue, showOnlyWhales]);
+  // Calculate order flow statistics per symbol
+  const orderFlowStats = useOrderFlow({
+    trades: rawData?.data.running_trade ?? null,
+  });
 
   // Title effect
   useEffect(() => {
     document.title = 'Global Running Trade | Whalemology';
   }, []);
 
-  if (loading || !data) {
-    return (
-      <div className="text-foreground flex min-h-screen items-center justify-center">
-        <div className="flex animate-pulse flex-col items-center">
-          <div className="border-primary mb-4 h-12 w-12 animate-spin rounded-full border-4 border-t-transparent" />
-          Loading Global Market Data...
+  if (loading || !rawData) {
+    // Only block if we are in live mode and authenticating/fetching
+    // If mock mode, activeData should be ready instantly (unless we want to fake load)
+    if (scenario === 'live' && (loading || !rawData)) {
+      return (
+        <div className="text-foreground flex min-h-screen items-center justify-center">
+          <div className="flex animate-pulse flex-col items-center">
+            <div className="border-primary mb-4 h-12 w-12 animate-spin rounded-full border-4 border-t-transparent" />
+            Loading Global Market Data...
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+    // If scenario is mock and activeData is somehow null
+    if (scenario !== 'live' && !rawData) return null;
   }
 
   // The render part is mostly identical, just using values from hooks
@@ -308,7 +430,24 @@ export default function GlobalRunningTradePage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-7">
           <div className="md:col-span-3">
             <div className="flex items-center gap-3">
-              <Popover>
+              {/* Simulation Selector */}
+              <Select
+                value={scenario}
+                onValueChange={(val) => setScenario(val as ScenarioType)}
+              >
+                <SelectTrigger className="bg-background w-[280px]">
+                  <SelectValue placeholder="Select Mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCENARIO_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Popover open={isDateOpen} onOpenChange={setIsDateOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
@@ -327,8 +466,14 @@ export default function GlobalRunningTradePage() {
                   <Calendar
                     mode="single"
                     selected={selectedDate}
-                    onSelect={setSelectedDate}
+                    onSelect={(date) => {
+                      if (date) {
+                        setSelectedDate(date);
+                        setIsDateOpen(false);
+                      }
+                    }}
                     initialFocus
+                    required
                   />
                 </PopoverContent>
               </Popover>
@@ -340,7 +485,6 @@ export default function GlobalRunningTradePage() {
                 minimumLot={minimumLot}
                 timeRangeStart={timeRangeStart}
                 timeRangeEnd={timeRangeEnd}
-                selectedDate={selectedDate}
                 setActionTypeFilter={setActionTypeFilter}
                 setMarketBoard={setMarketBoard}
                 setPriceRangeFrom={setPriceRangeFrom}
@@ -348,7 +492,6 @@ export default function GlobalRunningTradePage() {
                 setMinimumLot={setMinimumLot}
                 setTimeRangeStart={setTimeRangeStart}
                 setTimeRangeEnd={setTimeRangeEnd}
-                setSelectedDate={setSelectedDate}
                 resetFilters={resetFilters}
                 onApply={() => {
                   /* No-op: Hook handles refetch automatically on change */
@@ -389,127 +532,67 @@ export default function GlobalRunningTradePage() {
                 </MultiSelectContent>
               </MultiSelect>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="watchlist"
-                      checked={useWatchlist}
-                      onCheckedChange={(checked) =>
-                        handleWatchlistToggle(checked === true)
-                      }
-                    />
-                    <Label
-                      htmlFor="watchlist"
-                      className="flex cursor-pointer items-center"
-                    >
-                      <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                    </Label>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Use Watchlist</p>
-                </TooltipContent>
-              </Tooltip>
+              {featureFlags.watchlist && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="watchlist"
+                        checked={useWatchlist}
+                        onCheckedChange={(checked) =>
+                          handleWatchlistToggle(checked === true)
+                        }
+                      />
+                      <Label
+                        htmlFor="watchlist"
+                        className="flex cursor-pointer items-center"
+                      >
+                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                      </Label>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Use Watchlist</p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
             </div>
           </div>
 
           <div className="md:col-span-4">
             <div className="flex flex-wrap items-center gap-3">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div>
-                    <Select
-                      value={String(minConfidenceScore)}
-                      onValueChange={(value) =>
-                        setMinConfidenceScore(Number(value))
-                      }
+              <div className="text-muted-foreground ml-auto flex items-center gap-3 text-sm">
+                {/* Pause/Play Badge */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant={isPaused ? 'secondary' : 'default'}
+                      className={cn(
+                        'cursor-pointer gap-1',
+                        !isPaused && 'bg-green-600 hover:bg-green-700'
+                      )}
+                      onClick={handlePausePlay}
                     >
-                      <SelectTrigger
-                        className="w-[190px] gap-2 [&>span]:flex-1 [&>span]:text-left"
-                        id="confidence"
-                      >
-                        <TrendingUp className="h-4 w-4" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1">1 - All</SelectItem>
-                        <SelectItem value="2">2 - Weak+</SelectItem>
-                        <SelectItem value="3">3 - Moderate+</SelectItem>
-                        <SelectItem value="4">4 - Can Follow+</SelectItem>
-                        <SelectItem value="5">5 - Strong Follow+</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Min Confidence Score</p>
-                </TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div>
-                    <Select
-                      value={String(minTotalValue)}
-                      onValueChange={(value) => setMinTotalValue(Number(value))}
-                    >
-                      <SelectTrigger
-                        className="w-[120px] gap-2 [&>span]:flex-1 [&>span]:text-left"
-                        id="value"
-                      >
-                        <DollarSign className="h-4 w-4" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="0">All</SelectItem>
-                        <SelectItem value="100000000">100M+</SelectItem>
-                        <SelectItem value="200000000">200M+</SelectItem>
-                        <SelectItem value="500000000">500M+</SelectItem>
-                        <SelectItem value="1000000000">1B+</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Min Total Value</p>
-                </TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="whales"
-                      checked={showOnlyWhales}
-                      onCheckedChange={(checked) =>
-                        setShowOnlyWhales(checked === true)
-                      }
-                    />
-                    <Label
-                      htmlFor="whales"
-                      className="flex cursor-pointer items-center"
-                    >
-                      🐋
-                    </Label>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Show Whales Only</p>
-                </TooltipContent>
-              </Tooltip>
-
-              <div className="text-muted-foreground ml-auto text-sm">
+                      {isPaused ? (
+                        <Play className="h-3 w-3" />
+                      ) : (
+                        <Pause className="h-3 w-3" />
+                      )}
+                      {isPaused ? 'Paused' : 'Live'}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>
+                      {isPaused
+                        ? 'Click to resume updates'
+                        : 'Click to pause updates'}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
                 <span className="font-semibold">
-                  {data?.data.running_trade.length || 0}
+                  {rawData?.data.running_trade.length || 0}
                 </span>{' '}
-                live trades •{' '}
-                <span className="font-semibold">
-                  {data?.data.running_trade.length || 0} / 10,000
-                </span>{' '}
-                saved •{' '}
-                <span className="font-semibold">{anomalies.length}</span>{' '}
-                anomalies
+                trades
               </div>
             </div>
           </div>
@@ -519,20 +602,23 @@ export default function GlobalRunningTradePage() {
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-7">
           <div className="h-full min-h-0 md:col-span-3">
             <div className="sticky top-6 h-[calc(100vh-10rem)]">
-              <TradeFeed
-                data={data}
-                onLoadMore={handleLoadMore}
-                loadingMore={loadingMore}
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={handleSortChange}
-              />
+              {rawData && (
+                <TradeFeed
+                  data={rawData}
+                  onLoadMore={handleActiveLoadMore}
+                  loadingMore={isActiveLoadingMore}
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
+                  onSortChange={handleSortChange}
+                  onUserScroll={handleUserScroll}
+                />
+              )}
             </div>
           </div>
 
           <div className="md:col-span-4">
-            <div className="sticky top-6 h-[calc(100vh-10rem)]">
-              <AnomalyCard anomalies={anomalies} />
+            <div className="sticky top-6 h-[calc(100vh-10rem)] pr-1 pb-4">
+              <ConsolidatedStockList data={orderFlowStats} className="h-full" />
             </div>
           </div>
         </div>

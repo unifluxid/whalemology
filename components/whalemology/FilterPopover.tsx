@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Calendar } from '@/components/ui/calendar';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -10,8 +9,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { Filter, X, Calendar as CalendarIcon } from 'lucide-react';
-import { format } from 'date-fns';
+import { Filter, X } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 const lotOptions = [100, 200, 500, 1000, 5000];
 
@@ -24,7 +27,6 @@ interface FilterPopoverProps {
   minimumLot: number;
   timeRangeStart: string;
   timeRangeEnd: string;
-  selectedDate: Date | undefined;
 
   // Setters
   setActionTypeFilter: (type: 'all' | 'buy' | 'sell') => void;
@@ -34,7 +36,7 @@ interface FilterPopoverProps {
   setMinimumLot: (lot: number) => void;
   setTimeRangeStart: (time: string) => void;
   setTimeRangeEnd: (time: string) => void;
-  setSelectedDate: (date: Date) => void;
+
   resetFilters: () => void;
 
   onApply: () => void;
@@ -49,7 +51,7 @@ export function FilterPopover({
   minimumLot,
   timeRangeStart,
   timeRangeEnd,
-  selectedDate,
+
   setActionTypeFilter,
   setMarketBoard,
   setPriceRangeFrom,
@@ -57,13 +59,12 @@ export function FilterPopover({
   setMinimumLot,
   setTimeRangeStart,
   setTimeRangeEnd,
-  setSelectedDate,
+
   resetFilters,
   onApply,
   onReset,
 }: FilterPopoverProps) {
   const [open, setOpen] = useState(false);
-  const [showCalendar, setShowCalendar] = useState(false);
 
   // Local state for temporary values before Apply
   const [tempActionType, setTempActionType] = useState(actionTypeFilter);
@@ -73,7 +74,6 @@ export function FilterPopover({
   const [tempMinLot, setTempMinLot] = useState(minimumLot);
   const [tempTimeStart, setTempTimeStart] = useState(timeRangeStart);
   const [tempTimeEnd, setTempTimeEnd] = useState(timeRangeEnd);
-  const [tempDate, setTempDate] = useState<Date | undefined>(selectedDate);
 
   // Sync temp values when opening popover
   const handleOpenChange = (isOpen: boolean) => {
@@ -85,7 +85,6 @@ export function FilterPopover({
       setTempMinLot(minimumLot);
       setTempTimeStart(timeRangeStart);
       setTempTimeEnd(timeRangeEnd);
-      setTempDate(selectedDate);
     }
     setOpen(isOpen);
   };
@@ -99,7 +98,6 @@ export function FilterPopover({
     setMinimumLot(tempMinLot);
     setTimeRangeStart(tempTimeStart);
     setTimeRangeEnd(tempTimeEnd);
-    if (tempDate) setSelectedDate(tempDate);
 
     setOpen(false);
     onApply();
@@ -115,7 +113,6 @@ export function FilterPopover({
     setTempMinLot(0);
     setTempTimeStart('');
     setTempTimeEnd('');
-    setTempDate(new Date());
 
     if (onReset) onReset();
   };
@@ -264,35 +261,6 @@ export function FilterPopover({
                 )}
               </div>
             </div>
-          </div>
-
-          {/* Date Picker */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold">Select Date</Label>
-            <Popover open={showCalendar} onOpenChange={setShowCalendar}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="h-8 w-full justify-start text-left text-xs font-normal"
-                >
-                  <CalendarIcon className="mr-2 h-3 w-3" />
-                  {tempDate ? format(tempDate, 'dd MMM yyyy') : 'Pick a date'}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={tempDate}
-                  onSelect={(date) => {
-                    if (date) {
-                      setTempDate(date);
-                      setShowCalendar(false);
-                    }
-                  }}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
           </div>
 
           {/* Action Buttons */}

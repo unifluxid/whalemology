@@ -44,9 +44,6 @@ export function useTradeFilters({
     useState<string[]>(initialSymbols);
 
   // Quick Filters (Client-side / Anomaly only)
-  const [minConfidenceScore, setMinConfidenceScore] = useState(1);
-  const [minTotalValue, setMinTotalValue] = useState(0);
-  const [showOnlyWhales, setShowOnlyWhales] = useState(false);
   const { useWatchlist, setUseWatchlist } = useConfigStore();
 
   const resetFilters = useCallback(() => {
@@ -65,9 +62,7 @@ export function useTradeFilters({
     // Keeping symbols as is for now as it's often a separate context.
 
     // Reset quick filters
-    setMinConfidenceScore(1);
-    setMinTotalValue(0);
-    setShowOnlyWhales(false);
+    // Reset quick filters
     // setUseWatchlist(false); // Can decide if we want to reset this pref too, usually no for config
   }, []);
 
@@ -157,12 +152,6 @@ export function useTradeFilters({
     setSortOrder,
     selectedSymbols,
     setSelectedSymbols,
-    minConfidenceScore,
-    setMinConfidenceScore,
-    minTotalValue,
-    setMinTotalValue,
-    showOnlyWhales,
-    setShowOnlyWhales,
     useWatchlist,
     setUseWatchlist,
 

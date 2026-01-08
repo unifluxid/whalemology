@@ -15,6 +15,7 @@ interface TradeFeedProps {
   sortBy: 'time' | 'lot';
   sortOrder: 'asc' | 'desc';
   onSortChange: (sortBy: 'time' | 'lot') => void;
+  onUserScroll?: () => void;
 }
 
 export function TradeFeed({
@@ -24,6 +25,7 @@ export function TradeFeed({
   sortBy,
   sortOrder,
   onSortChange,
+  onUserScroll,
 }: TradeFeedProps) {
   const { analyzedTrades, summary } = useMemo(
     () => analyzeTrades(data.data.running_trade),
@@ -75,6 +77,12 @@ export function TradeFeed({
   // Handle infinite scroll via scroll event
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollHeight, scrollTop, clientHeight } = e.currentTarget;
+
+    // Auto-pause when user scrolls down (not at top)
+    if (scrollTop > 50 && onUserScroll) {
+      onUserScroll();
+    }
+
     // Trigger when within 200px of bottom
     if (
       scrollHeight - scrollTop - clientHeight < 200 &&

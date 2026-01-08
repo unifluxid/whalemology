@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { TradeItem } from '@/lib/stockbit-types';
 import { RunningTradeFilters } from '@/lib/stockbit-data';
 import { enrichTrade } from '@/lib/trade-analysis';
@@ -15,7 +15,48 @@ interface TradeState {
   clearTrades: () => void;
 }
 
-const MAX_STORED_TRADES = 10000;
+// Increased to 200,000 for deep in-memory history
+const MAX_STORED_TRADES = 200_000;
+
+// Custom storage that handles quota errors gracefully
+const safeSessionStorage: StateStorage = {
+  getItem: (name: string) => {
+    try {
+      return sessionStorage.getItem(name);
+    } catch {
+      console.warn('[TradeStore] Failed to read from sessionStorage');
+      return null;
+    }
+  },
+  setItem: (name: string, value: string) => {
+    try {
+      sessionStorage.setItem(name, value);
+    } catch (error) {
+      // Handle QuotaExceededError - clear old data and try again
+      if (
+        error instanceof DOMException &&
+        error.name === 'QuotaExceededError'
+      ) {
+        console.warn(
+          '[TradeStore] Storage quota exceeded, clearing old data...'
+        );
+        try {
+          sessionStorage.removeItem(name);
+          // Try to store with reduced data - this will be handled by the persist middleware
+        } catch {
+          console.warn('[TradeStore] Failed to clear storage');
+        }
+      }
+    }
+  },
+  removeItem: (name: string) => {
+    try {
+      sessionStorage.removeItem(name);
+    } catch {
+      console.warn('[TradeStore] Failed to remove from sessionStorage');
+    }
+  },
+};
 
 export const useTradeStore = create<TradeState>()(
   persist(
@@ -58,7 +99,7 @@ export const useTradeStore = create<TradeState>()(
 
         set({
           trades: trimmedTrades,
-          filters, // Update filters just in case? Usually filters shouldn't change here
+          filters,
           lastUpdated: Date.now(),
         });
       },
@@ -67,8 +108,10 @@ export const useTradeStore = create<TradeState>()(
     }),
     {
       name: 'whalemology_running_trades',
-      storage: createJSONStorage(() => sessionStorage),
-      // Optional: partialize to assume what we save? We save everything defined in state
+      storage: createJSONStorage(() => safeSessionStorage),
+      // IMPORTANT: Only persist filters to avoid SessionStorage quota (5MB) issues.
+      // Trades are kept in memory only (up to MAX_STORED_TRADES).
+      partialize: (state) => ({ filters: state.filters }),
     }
   )
 );

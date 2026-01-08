@@ -2,7 +2,7 @@
 
 import { useEffect, useState, use } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore, useConfigStore } from '@/store';
+import { useAuthStore } from '@/store';
 import { StockHeader } from '@/components/whalemology/StockHeader';
 import { BrokerTable } from '@/components/whalemology/BrokerTable';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
@@ -33,7 +33,6 @@ export default function WhalemologyDashboard({ params }: PageProps) {
   const router = useRouter();
   const { ticker } = use(params);
   const { token } = useAuthStore();
-  const { pollInterval } = useConfigStore();
 
   const [data, setData] = useState<DashboardData>({
     emittenInfo: null,
@@ -161,49 +160,7 @@ export default function WhalemologyDashboard({ params }: PageProps) {
     };
 
     init();
-
-    // 4. Poll for running trades
-    const interval = setInterval(async () => {
-      const currentToken = useAuthStore.getState().token;
-      if (!currentToken) return;
-      try {
-        const newTradesData = await getRunningTrade(ticker, currentToken);
-
-        setData((prev) => {
-          if (!prev.runningTrade)
-            return { ...prev, runningTrade: newTradesData };
-
-          const currentTrades = prev.runningTrade.data.running_trade;
-          const newItemList = newTradesData.data.running_trade;
-
-          // Filter out items we already have in the current list
-          const distinctNewItems = newItemList.filter(
-            (newItem) =>
-              !currentTrades.some(
-                (existing) => existing.trade_number === newItem.trade_number
-              )
-          );
-
-          if (distinctNewItems.length === 0) return prev;
-
-          return {
-            ...prev,
-            runningTrade: {
-              ...prev.runningTrade,
-              data: {
-                ...prev.runningTrade.data,
-                running_trade: [...distinctNewItems, ...currentTrades],
-              },
-            },
-          };
-        });
-      } catch (e) {
-        console.error('Polling error', e);
-      }
-    }, pollInterval);
-
-    return () => clearInterval(interval);
-  }, [ticker, token, router, pollInterval]);
+  }, [ticker, token, router]);
 
   if (!token) {
     return (

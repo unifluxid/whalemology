@@ -166,6 +166,7 @@ export interface TradeItem {
   lotNum?: number;
   value?: number;
   changeNum?: number;
+  seconds?: number; // Cached time in seconds for time decay calculations
 }
 
 export interface WatchlistSymbol {

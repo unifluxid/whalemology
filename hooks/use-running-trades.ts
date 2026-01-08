@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { getRunningTrade, RunningTradeFilters } from '@/lib/stockbit-data';
 import { RunningTrade } from '@/lib/stockbit-types';
 import { useTradeStore } from '@/store/trade-store';
@@ -6,20 +6,12 @@ import { useTradeStore } from '@/store/trade-store';
 interface UseRunningTradesProps {
   token: string | null;
   filters: RunningTradeFilters;
-  pollInterval?: number;
-  pausePolling?: boolean;
 }
 
-export function useRunningTrades({
-  token,
-  filters,
-  pollInterval = 3000,
-  pausePolling = false,
-}: UseRunningTradesProps) {
+export function useRunningTrades({ token, filters }: UseRunningTradesProps) {
   // Use Zustand Store
   const {
     trades: storedTrades,
-    filters: storedFilters,
     setTrades,
     appendTrades,
     clearTrades,
@@ -35,7 +27,8 @@ export function useRunningTrades({
     // we might return null to show loading spinner, or return empty object.
     // But typically UI checks 'if (!data)'.
     // If we have stored trades, we return valid object immediately.
-    if (storedTrades.length === 0 && loading) return null;
+    // Always return null (loading) during fetch to ignore stored data on refresh
+    if (loading) return null;
 
     return {
       message: 'From Storage',
@@ -48,9 +41,6 @@ export function useRunningTrades({
       },
     };
   }, [storedTrades, loading]);
-
-  // Track previous filters to detect changes
-  const prevFiltersRef = useRef<string>(JSON.stringify(filters));
 
   const fetchTrades = useCallback(
     async (
@@ -71,37 +61,15 @@ export function useRunningTrades({
   useEffect(() => {
     if (!token) return;
 
-    const currentFiltersStr = JSON.stringify(filters);
-    const isFilterChange = prevFiltersRef.current !== currentFiltersStr;
-
-    // Update ref
-    prevFiltersRef.current = currentFiltersStr;
-
     const init = async () => {
       try {
-        // Check if we have valid stored data
-        if (
-          !isFilterChange &&
-          storedTrades.length > 0 &&
-          storedFilters &&
-          JSON.stringify(storedFilters) === currentFiltersStr
-        ) {
-          setLoading(false);
-          return;
-        }
-
-        // If filters changed, clear
-        if (isFilterChange) {
-          clearTrades();
-          setLoading(true);
-        }
+        // Always clear old data to start fresh (ignore stored on refresh)
+        clearTrades();
+        setLoading(true);
 
         const tradesData = await fetchTrades(token);
         if (tradesData && tradesData.data) {
           setTrades(tradesData.data.running_trade, filters);
-          // We should also perhaps update the 'is_open_market' etc if we had a place to put it.
-          // But since we only store trades... the polling will fix metadata if we used a separate state.
-          // For now, metadata is ephemeral or defaulted.
         }
       } catch (error) {
         console.error('Failed to load global trades', error);
@@ -111,37 +79,20 @@ export function useRunningTrades({
     };
 
     init();
-  }, [
-    token,
-    fetchTrades,
-    filters,
-    storedTrades.length,
-    storedFilters,
-    clearTrades,
-    setTrades,
-  ]);
+  }, [token, fetchTrades, filters, clearTrades, setTrades]);
 
-  // Polling
-  useEffect(() => {
-    if (!token || pausePolling) return;
-
-    // Flag to ensure we don't start polling until initial load is settled?
-    // Actually polling is independent, it just appends.
-
-    const interval = setInterval(async () => {
-      try {
-        const newTradesData = await fetchTrades(token);
-        // Store handles deduplication and appending
-        if (newTradesData && newTradesData.data.running_trade.length > 0) {
-          appendTrades(newTradesData.data.running_trade, filters);
-        }
-      } catch (e) {
-        console.error('Polling error', e);
+  // Refetch trades (used when resuming from pause)
+  const refetch = useCallback(async () => {
+    if (!token) return;
+    try {
+      const tradesData = await fetchTrades(token);
+      if (tradesData && tradesData.data) {
+        setTrades(tradesData.data.running_trade, filters);
       }
-    }, pollInterval);
-
-    return () => clearInterval(interval);
-  }, [token, pollInterval, fetchTrades, pausePolling, appendTrades, filters]);
+    } catch (error) {
+      console.error('Failed to refetch trades', error);
+    }
+  }, [token, fetchTrades, filters, setTrades]);
 
   // Load More (Historical)
   const handleLoadMore = async () => {
@@ -149,7 +100,7 @@ export function useRunningTrades({
 
     const currentTrades = data.data.running_trade;
     // Limit check is handled by store implicitly on set, but we can check here too
-    if (currentTrades.length >= 10000) {
+    if (currentTrades.length >= 500_000) {
       // console.warn("Reached limit");
       return;
     }
@@ -178,5 +129,7 @@ export function useRunningTrades({
     loading,
     loadingMore,
     handleLoadMore,
+    refetch,
+    appendTrades,
   };
 }
