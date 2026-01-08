@@ -220,12 +220,11 @@ export function useTradeAnalysis({
 // Helper function to filter anomalies
 function filterAnomalies(
   anomalies: StockAnomaly[],
-  minConfidenceScore: number,
+  _minConfidenceScore: number, // Kept for API compatibility, but not used since StockAnomaly doesn't have confidenceScore
   minTotalValue: number,
   showOnlyWhales: boolean
 ): StockAnomaly[] {
   return anomalies.filter((anomaly) => {
-    if (anomaly.confidenceScore < minConfidenceScore) return false;
     if (anomaly.totalValue < minTotalValue) return false;
     if (showOnlyWhales && anomaly.whaleCount === 0) return false;
     return true;

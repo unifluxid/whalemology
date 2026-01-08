@@ -10,11 +10,6 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Filter, X } from 'lucide-react';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 
 const lotOptions = [100, 200, 500, 1000, 5000];
 
