@@ -6,6 +6,7 @@ import { TradeFeed } from '@/components/whalemology/TradeFeed';
 import { ConsolidatedStockList } from '@/components/whalemology/ConsolidatedStockList';
 import { FilterPopover } from '@/components/whalemology/FilterPopover';
 import { getWatchlistSymbols } from '@/lib/stockbit-data';
+import { getMarketStatus } from '@/lib/market-hours';
 import { featureFlags } from '@/lib/feature-flags';
 import { WatchlistSymbol } from '@/lib/stockbit-types';
 import { Button } from '@/components/ui/button';
@@ -110,10 +111,9 @@ export default function GlobalRunningTradePage() {
   const playWS = useRunningTradeStore((state) => state.play);
   const setStock = useRunningTradeStore((state) => state.setStock);
 
-  // Determine if market is open based on REST data
-  const isOpenMarket = useMemo(() => {
-    return restData?.data?.is_open_market ?? false;
-  }, [restData]);
+  // Determine if market is open based on IDX trading schedule
+  const marketStatus = useMemo(() => getMarketStatus(), []);
+  const isOpenMarket = marketStatus.isOpen;
 
   // 6. WebSocket Trade Data Hook
   const { data: wsData } = useRunningTradeWS({
@@ -392,7 +392,7 @@ export default function GlobalRunningTradePage() {
                         setIsDateOpen(false);
                       }
                     }}
-                    initialFocus
+                    disabled={(date) => date > new Date()}
                     required
                   />
                 </PopoverContent>
@@ -482,33 +482,38 @@ export default function GlobalRunningTradePage() {
           <div className="md:col-span-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="text-muted-foreground ml-auto flex items-center gap-3 text-sm">
-                {/* Pause/Play Badge */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Badge
-                      variant={isPaused ? 'secondary' : 'default'}
-                      className={cn(
-                        'cursor-pointer gap-1',
-                        !isPaused && 'bg-green-600 hover:bg-green-700'
-                      )}
-                      onClick={handlePausePlay}
-                    >
-                      {isPaused ? (
-                        <Play className="h-3 w-3" />
-                      ) : (
-                        <Pause className="h-3 w-3" />
-                      )}
-                      {isPaused ? 'Paused' : 'Live'}
-                    </Badge>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>
-                      {isPaused
-                        ? 'Click to resume updates'
-                        : 'Click to pause updates'}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
+                {/* Pause/Play Badge - Show session status */}
+                {isOpenMarket ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge
+                        variant="secondary"
+                        className="w-24 cursor-pointer justify-center gap-1"
+                        onClick={handlePausePlay}
+                      >
+                        {isPaused ? (
+                          <Play className="h-3 w-3" fill="currentColor" />
+                        ) : (
+                          <Pause className="h-3 w-3" fill="currentColor" />
+                        )}
+                        {isPaused ? 'Paused' : 'Live'}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        {isPaused
+                          ? 'Click to resume updates'
+                          : 'Click to pause updates'}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Badge variant="secondary" className="gap-1">
+                    {marketStatus.label}
+                    {marketStatus.nextOpenTime &&
+                      ` • ${marketStatus.nextOpenTime}`}
+                  </Badge>
+                )}
                 <span className="font-semibold">
                   {rawData?.data.running_trade.length || 0}
                 </span>{' '}

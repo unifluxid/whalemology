@@ -177,7 +177,7 @@ export function DatafeedProvider({
 
     const buffer = encodePingRequest();
     wsRef.current.send(buffer);
-    console.log('[Datafeed] Sent ping');
+    // console.log('[Datafeed] Sent ping');
 
     // Set pong timeout
     pongTimeout.current = setTimeout(() => {
@@ -189,7 +189,7 @@ export function DatafeedProvider({
   // Handle heartbeat response
   const handlePong = useCallback(() => {
     clearTimeout(pongTimeout.current!);
-    console.log('[Datafeed] Received pong');
+    // console.log('[Datafeed] Received pong');
   }, []);
 
   // Connect to WebSocket
@@ -203,7 +203,7 @@ export function DatafeedProvider({
 
     try {
       // Step 1: Get WS key from API
-      console.log('[Datafeed] Getting WebSocket key...');
+      // console.log('[Datafeed] Getting WebSocket key...');
       const wsKey = await getWebSocketKey();
 
       if (!wsKey) {
@@ -211,15 +211,15 @@ export function DatafeedProvider({
         setError(new Error('Failed to get WebSocket key'));
         return;
       }
-      console.log('[Datafeed] Got WebSocket key');
+      // console.log('[Datafeed] Got WebSocket key');
 
       // Step 2: Connect to WebSocket
-      console.log('[Datafeed] Connecting to WebSocket:', WEBSOCKET_URL);
+      // console.log('[Datafeed] Connecting to WebSocket:', WEBSOCKET_URL);
       const ws = new WebSocket(WEBSOCKET_URL);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        console.log('[Datafeed] WebSocket connected');
+        // console.log('[Datafeed] WebSocket connected');
         setIsConnected(true);
         setError(null);
         reconnectAttempts.current = 0;
@@ -227,7 +227,7 @@ export function DatafeedProvider({
         // Step 3: Send auth message with WS key (not token)
         const authBuffer = encodeAuthRequest(wsKey, userId);
         ws.send(authBuffer);
-        console.log('[Datafeed] Sent auth request with WS key');
+        // console.log('[Datafeed] Sent auth request with WS key');
 
         // Assume authorized after sending
         setIsAuthorized(true);
@@ -250,10 +250,10 @@ export function DatafeedProvider({
               runningTradeBatch: useAllSymbols ? [] : symbols, // Field 6 - empty when using * in field 5
             });
             ws.send(channelBuffer);
-            console.log(
-              '[Datafeed] Subscribed to:',
-              useAllSymbols ? 'ALL (*)' : symbols.join(', ')
-            );
+            // console.log(
+            //   '[Datafeed] Subscribed to:',
+            //   useAllSymbols ? 'ALL (*)' : symbols.join(', ')
+            // );
           }
         }, 500);
       };
@@ -305,11 +305,11 @@ export function DatafeedProvider({
                   })
                 );
 
-                console.log(
-                  '[Datafeed] Dispatching trades:',
-                  mappedTrades.length,
-                  'trades'
-                );
+                // console.log(
+                //   '[Datafeed] Dispatching trades:',
+                //   mappedTrades.length,
+                //   'trades'
+                // );
                 dispatchMessage({
                   runningTradeBatch: {
                     batch: mappedTrades,
@@ -323,7 +323,7 @@ export function DatafeedProvider({
           // Handle string data (JSON fallback)
           if (typeof event.data === 'string') {
             const data = JSON.parse(event.data);
-            console.log('[Datafeed] Received JSON:', data);
+            // console.log('[Datafeed] Received JSON:', data);
             dispatchMessage(data);
           }
         } catch (e) {
@@ -336,8 +336,8 @@ export function DatafeedProvider({
         setError(new Error('WebSocket connection error'));
       };
 
-      ws.onclose = (event) => {
-        console.log('[Datafeed] WebSocket closed:', event.code, event.reason);
+      ws.onclose = (_event) => {
+        // console.log('[Datafeed] WebSocket closed:', event.code, event.reason);
         setIsConnected(false);
         setIsAuthorized(false);
 
@@ -353,9 +353,9 @@ export function DatafeedProvider({
           );
           reconnectAttempts.current++;
 
-          console.log(
-            `[Datafeed] Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`
-          );
+          // console.log(
+          //   `[Datafeed] Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`
+          // );
 
           reconnectTimeout.current = setTimeout(() => {
             connectRef.current();

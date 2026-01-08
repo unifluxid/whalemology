@@ -216,7 +216,14 @@ export function calculatePerSymbolOrderFlow(
         sameBrokerValue += value;
       }
 
-      // TIERED Bucketing
+      // Skip Negotiated (NG) trades from tier analysis
+      // NG trades are pre-arranged deals that don't reflect real market sentiment
+      // Only Regular (RG) trades should contribute to whale/signal detection
+      if (trade.market_board === 'NG') {
+        continue;
+      }
+
+      // TIERED Bucketing (only for RG/Regular board trades)
       const tier = getTradeTier(value);
       const isSplitWhale = splitTrades.has(trade);
       const signedValue = isBuy ? value : -value;

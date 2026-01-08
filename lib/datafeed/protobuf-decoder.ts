@@ -429,14 +429,14 @@ export function decodeWebSocketMessage(
     const buffer = new Uint8Array(data);
     const fields = parseProtobufFields(buffer);
 
-    console.log(
-      '[Protobuf] Parsed fields:',
-      JSON.stringify(
-        fields,
-        (_, v) => (v instanceof Uint8Array ? `<bytes:${v.length}>` : v),
-        2
-      )
-    );
+    // console.log(
+    //   '[Protobuf] Parsed fields:',
+    //   JSON.stringify(
+    //     fields,
+    //     (_, v) => (v instanceof Uint8Array ? `<bytes:${v.length}>` : v),
+    //     2
+    //   )
+    // );
 
     const message: DecodedMessage = { rawFields: fields };
 
