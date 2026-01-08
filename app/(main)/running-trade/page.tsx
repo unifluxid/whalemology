@@ -14,14 +14,6 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-// Duplicate Select imports removed
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -31,11 +23,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import {
-  useMockScenarios,
-  SCENARIO_OPTIONS,
-  type ScenarioType,
-} from '@/hooks/use-mock-scenarios';
 import {
   MultiSelect,
   MultiSelectContent,
@@ -138,20 +125,11 @@ export default function GlobalRunningTradePage() {
   // restData comes from useRunningTrades which reads from the store.
   // The store is updated by WS data via appendTrades in useEffect below.
   // So restData is the single source of truth for the UI.
-  const liveData = restData;
+  const rawData = restData;
 
-  // 6. Simulation Mode Logic
-  const [scenario, setScenario] = useState<ScenarioType>('live');
-  const mockData = useMockScenarios(scenario);
-
-  const rawData = useMemo(() => {
-    return scenario === 'live' ? liveData : mockData;
-  }, [scenario, liveData, mockData]);
-
-  // Handle load more only for live mode
-  const handleActiveLoadMore =
-    scenario === 'live' ? handleLoadMore : async () => {};
-  const isActiveLoadingMore = scenario === 'live' ? loadingMore : false;
+  // Handle load more
+  const handleActiveLoadMore = handleLoadMore;
+  const isActiveLoadingMore = loadingMore;
 
   // Sync symbols to WS store when selectedSymbols change
   useEffect(() => {
@@ -371,20 +349,14 @@ export default function GlobalRunningTradePage() {
   }, []);
 
   if (loading || !rawData) {
-    // Only block if we are in live mode and authenticating/fetching
-    // If mock mode, activeData should be ready instantly (unless we want to fake load)
-    if (scenario === 'live' && (loading || !rawData)) {
-      return (
-        <div className="text-foreground flex min-h-screen items-center justify-center">
-          <div className="flex animate-pulse flex-col items-center">
-            <div className="border-primary mb-4 h-12 w-12 animate-spin rounded-full border-4 border-t-transparent" />
-            Loading Global Market Data...
-          </div>
+    return (
+      <div className="text-foreground flex min-h-screen items-center justify-center">
+        <div className="flex animate-pulse flex-col items-center">
+          <div className="border-primary mb-4 h-12 w-12 animate-spin rounded-full border-4 border-t-transparent" />
+          Loading Global Market Data...
         </div>
-      );
-    }
-    // If scenario is mock and activeData is somehow null
-    if (scenario !== 'live' && !rawData) return null;
+      </div>
+    );
   }
 
   // The render part is mostly identical, just using values from hooks
@@ -395,23 +367,6 @@ export default function GlobalRunningTradePage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-7">
           <div className="md:col-span-3">
             <div className="flex items-center gap-3">
-              {/* Simulation Selector */}
-              <Select
-                value={scenario}
-                onValueChange={(val) => setScenario(val as ScenarioType)}
-              >
-                <SelectTrigger className="bg-background w-[280px]">
-                  <SelectValue placeholder="Select Mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  {SCENARIO_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
               <Popover open={isDateOpen} onOpenChange={setIsDateOpen}>
                 <PopoverTrigger asChild>
                   <Button
