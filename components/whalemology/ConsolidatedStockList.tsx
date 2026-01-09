@@ -264,8 +264,18 @@ export function ConsolidatedStockList({
       }
     }
 
-    // Sort: Most trades first
-    return list.sort((a, b) => b.totalCount - a.totalCount);
+    // Sort: Signal strength first, then most trades
+    return list.sort((a, b) => {
+      const scoreA = Math.abs(a.signalScore) * 100 + Math.abs(a.pressureScore);
+      const scoreB = Math.abs(b.signalScore) * 100 + Math.abs(b.pressureScore);
+
+      if (scoreB !== scoreA) {
+        return scoreB - scoreA; // Higher signal first
+      }
+
+      // Within same signal, most trades first
+      return b.totalCount - a.totalCount;
+    });
   }, [data.allSymbols, activeFilter]);
 
   // Counts for each tab
