@@ -56,7 +56,7 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
 
   return (
     <div className="hover:bg-accent/50 flex flex-col gap-1 rounded-lg border p-2 transition-colors">
-      {/* Top Line: Symbol, Last Price (+percentage) */}
+      {/* Top Line: Symbol, Last Price (+percentage), Entry Badge */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold">{item.symbol}</span>
@@ -75,14 +75,33 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
           </span>
         </div>
 
-        {badgeLabel && (
-          <Badge
-            variant="outline"
-            className={cn('h-5 px-1.5 text-[10px] uppercase', badgeColor)}
-          >
-            {badgeLabel}
-          </Badge>
-        )}
+        {/* Entry Badge - Right aligned */}
+        <div className="flex items-center gap-1">
+          {item.bestEntryPrice > 0 && item.signal === 'markup' && (
+            <Badge
+              variant="secondary"
+              className="h-5 border-blue-500/30 bg-blue-500/15 px-1.5 text-[10px] font-semibold text-blue-500"
+            >
+              🚀 BUY @ {item.bestEntryPrice.toLocaleString()}
+            </Badge>
+          )}
+          {item.bestEntryPrice > 0 && item.signal === 'accumulation' && (
+            <Badge
+              variant="secondary"
+              className="h-5 border-emerald-500/30 bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-500"
+            >
+              💰 DIP @ {item.bestEntryPrice.toLocaleString()}
+            </Badge>
+          )}
+          {badgeLabel && (
+            <Badge
+              variant="outline"
+              className={cn('h-5 px-1.5 text-[10px] uppercase', badgeColor)}
+            >
+              {badgeLabel}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Bottom Line: Tiered Whale Breakdown */}
