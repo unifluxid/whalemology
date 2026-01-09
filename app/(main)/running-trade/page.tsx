@@ -338,11 +338,17 @@ export default function GlobalRunningTradePage() {
 
   // Calculate order flow statistics per symbol (throttled to 500ms)
   // Filter trades by selectedSymbols if filter is active
+  // Use Set for O(1) lookup instead of Array.includes O(n)
+  const selectedSymbolsSet = useMemo(
+    () => new Set(selectedSymbols),
+    [selectedSymbols]
+  );
+
   const filteredTradesForAnalysis = useMemo(() => {
     const trades = rawData?.data.running_trade ?? [];
-    if (selectedSymbols.length === 0) return trades; // No filter = all trades
-    return trades.filter((trade) => selectedSymbols.includes(trade.code));
-  }, [rawData?.data.running_trade, selectedSymbols]);
+    if (selectedSymbolsSet.size === 0) return trades; // No filter = all trades
+    return trades.filter((trade) => selectedSymbolsSet.has(trade.code));
+  }, [rawData?.data.running_trade, selectedSymbolsSet]);
 
   const orderFlowStats = useOrderFlowThrottled({
     trades:
