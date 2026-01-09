@@ -56,13 +56,13 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
 
   return (
     <div className="hover:bg-accent/50 flex flex-col gap-1 rounded-lg border p-2 transition-colors">
-      {/* Top Line: Symbol, Price Change, Signal */}
+      {/* Top Line: Symbol, Last Price (+percentage) */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold">{item.symbol}</span>
           <span
             className={cn(
-              'text-xs font-medium',
+              'font-mono text-xs font-medium',
               item.priceChange > 0
                 ? 'text-green-500'
                 : item.priceChange < 0
@@ -70,27 +70,9 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
                   : 'text-muted-foreground'
             )}
           >
-            {item.priceChange > 0 ? '+' : ''}
-            {item.priceChange.toFixed(2)}%
+            {item.lastPrice.toLocaleString()} ({item.priceChange > 0 ? '+' : ''}
+            {item.priceChange.toFixed(2)}%)
           </span>
-
-          {/* Best Entry Price Badge - Actionable Labels */}
-          {item.bestEntryPrice > 0 && item.signal === 'markup' && (
-            <Badge
-              variant="secondary"
-              className="h-5 border-blue-500/30 bg-blue-500/15 px-1.5 text-[10px] font-semibold text-blue-500"
-            >
-              🚀 BUY NOW @ {item.bestEntryPrice.toLocaleString()}
-            </Badge>
-          )}
-          {item.bestEntryPrice > 0 && item.signal === 'accumulation' && (
-            <Badge
-              variant="secondary"
-              className="h-5 border-emerald-500/30 bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-500"
-            >
-              💰 BUY DIP @ {item.bestEntryPrice.toLocaleString()}
-            </Badge>
-          )}
         </div>
 
         {badgeLabel && (
