@@ -264,17 +264,17 @@ export function ConsolidatedStockList({
       }
     }
 
-    // Sort: Signal strength first, then most trades
+    // Sort: Most trades first, then signal strength
     return list.sort((a, b) => {
-      const scoreA = Math.abs(a.signalScore) * 100 + Math.abs(a.pressureScore);
-      const scoreB = Math.abs(b.signalScore) * 100 + Math.abs(b.pressureScore);
-
-      if (scoreB !== scoreA) {
-        return scoreB - scoreA; // Higher signal first
+      // First by trade count (most trades first)
+      if (b.totalCount !== a.totalCount) {
+        return b.totalCount - a.totalCount;
       }
 
-      // Within same signal, most trades first
-      return b.totalCount - a.totalCount;
+      // Within same trade count, signal strength first
+      const scoreA = Math.abs(a.signalScore) * 100 + Math.abs(a.pressureScore);
+      const scoreB = Math.abs(b.signalScore) * 100 + Math.abs(b.pressureScore);
+      return scoreB - scoreA;
     });
   }, [data.allSymbols, activeFilter]);
 
