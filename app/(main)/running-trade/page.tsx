@@ -337,8 +337,16 @@ export default function GlobalRunningTradePage() {
   // Session sync is no longer needed here
 
   // Calculate order flow statistics per symbol (throttled to 500ms)
+  // Filter trades by selectedSymbols if filter is active
+  const filteredTradesForAnalysis = useMemo(() => {
+    const trades = rawData?.data.running_trade ?? [];
+    if (selectedSymbols.length === 0) return trades; // No filter = all trades
+    return trades.filter((trade) => selectedSymbols.includes(trade.code));
+  }, [rawData?.data.running_trade, selectedSymbols]);
+
   const orderFlowStats = useOrderFlowThrottled({
-    trades: rawData?.data.running_trade ?? null,
+    trades:
+      filteredTradesForAnalysis.length > 0 ? filteredTradesForAnalysis : null,
     interval: 500, // Analyze every 500ms instead of every change
     // Always enabled - Market Radar should analyze even when WS is paused
   });
