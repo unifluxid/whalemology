@@ -264,19 +264,8 @@ export function ConsolidatedStockList({
       }
     }
 
-    // Sort: Primary by signal strength, Secondary by price (cheapest first)
-    return list.sort((a, b) => {
-      // First compare by signal score (strong signals first)
-      const scoreA = Math.abs(a.signalScore) * 100 + Math.abs(a.pressureScore);
-      const scoreB = Math.abs(b.signalScore) * 100 + Math.abs(b.pressureScore);
-
-      if (scoreB !== scoreA) {
-        return scoreB - scoreA; // Higher score first
-      }
-
-      // Within same signal strength, sort by price (cheapest first)
-      return a.lastPrice - b.lastPrice;
-    });
+    // Sort: Most trades first
+    return list.sort((a, b) => b.totalCount - a.totalCount);
   }, [data.allSymbols, activeFilter]);
 
   // Counts for each tab
