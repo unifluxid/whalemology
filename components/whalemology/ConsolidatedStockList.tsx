@@ -104,68 +104,40 @@ function StockRow({ item }: { item: SymbolOrderFlow }) {
         </div>
       </div>
 
-      {/* Bottom Line: Tiered Whale Breakdown */}
+      {/* Bottom Line: Whale vs Retail */}
       <div className="mt-1 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          {/* Mega Whale */}
-          {item.megaWhaleNetValue !== 0 && (
-            <div className="flex items-center gap-0.5">
-              <span className="text-[10px]">🐋🐋</span>
-              <span
-                className={cn(
-                  'font-mono text-[10px] font-bold',
-                  item.megaWhaleNetValue > 0 ? 'text-green-600' : 'text-red-600'
-                )}
-              >
-                {formatNumber(item.megaWhaleNetValue)}
-              </span>
-            </div>
-          )}
-          {/* Whale */}
-          {item.whaleNetValue !== 0 && (
-            <div className="flex items-center gap-0.5">
-              <span className="text-[10px]">🐋</span>
-              <span
-                className={cn(
-                  'font-mono text-[10px] font-bold',
-                  item.whaleNetValue > 0 ? 'text-green-600' : 'text-red-600'
-                )}
-              >
-                {formatNumber(item.whaleNetValue)}
-              </span>
-            </div>
-          )}
-          {/* Dolphin */}
-          {item.dolphinNetValue !== 0 && (
-            <div className="flex items-center gap-0.5">
-              <span className="text-[10px]">🐬</span>
-              <span
-                className={cn(
-                  'font-mono text-[10px] font-bold',
-                  item.dolphinNetValue > 0 ? 'text-green-600' : 'text-red-600'
-                )}
-              >
-                {formatNumber(item.dolphinNetValue)}
-              </span>
-            </div>
-          )}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px]">🐋</span>
+          <span
+            className={cn(
+              'font-mono text-[10px] font-bold',
+              item.whaleNetValue > 0
+                ? 'text-green-600'
+                : item.whaleNetValue < 0
+                  ? 'text-red-600'
+                  : 'text-muted-foreground'
+            )}
+          >
+            {formatNumber(item.whaleNetValue)}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Retail */}
-          {item.retailNetValue !== 0 && (
-            <div className="flex items-center gap-0.5">
-              <span
-                className={cn(
-                  'font-mono text-[10px] font-bold',
-                  item.retailNetValue > 0 ? 'text-green-600' : 'text-red-600'
-                )}
-              >
-                {formatNumber(item.retailNetValue)}
-              </span>
-              <span className="text-[10px]">🦐</span>
-            </div>
-          )}
+          <div className="flex items-center gap-1">
+            <span
+              className={cn(
+                'font-mono text-[10px] font-bold',
+                item.retailNetValue > 0
+                  ? 'text-green-600'
+                  : item.retailNetValue < 0
+                    ? 'text-red-600'
+                    : 'text-muted-foreground'
+              )}
+            >
+              {formatNumber(item.retailNetValue)}
+            </span>
+            <span className="text-[10px]">🦐</span>
+          </div>
           {/* Same-broker warning */}
           {item.sameBrokerCount > 0 && (
             <span

@@ -5,11 +5,8 @@ import { TradeItem } from '@/lib/stockbit-types';
 
 import {
   detectSplitWhales,
-  getTradeTier,
   isSameBrokerTrade,
-  MEGA_WHALE_THRESHOLD,
   WHALE_THRESHOLD,
-  DOLPHIN_THRESHOLD,
 } from '@/lib/split-detection';
 
 // Stats per tier
@@ -171,10 +168,8 @@ export function calculatePerSymbolOrderFlow(
     let lastPrice = 0;
     let priceChange = 0;
 
-    // TIERED tracking
-    let megaWhaleNetValue = 0;
+    // Whale/Retail tracking (2-tier system)
     let whaleNetValue = 0;
-    let dolphinNetValue = 0;
     let retailNetValue = 0;
 
     // Legacy tracking (for backward compat)
@@ -223,33 +218,12 @@ export function calculatePerSymbolOrderFlow(
         continue;
       }
 
-      // TIERED Bucketing (only for RG/Regular board trades)
-      const tier = getTradeTier(value);
+      // Simple 2-tier Bucketing: Whale (≥200M) vs Retail (<200M)
       const isSplitWhale = splitTrades.has(trade);
       const signedValue = isBuy ? value : -value;
+      const isWhale = value >= WHALE_THRESHOLD || isSplitWhale;
 
-      // Apply to appropriate tier
-      if (
-        tier === 'mega_whale' ||
-        (isSplitWhale && value >= MEGA_WHALE_THRESHOLD)
-      ) {
-        megaWhaleNetValue += signedValue;
-        whaleVolume += lot;
-        if (isBuy) {
-          globalWhale.buyValue += value;
-          globalWhale.buyVolume += lot;
-          globalWhale.buyCount++;
-          whaleBuyValue += value;
-          whaleBuyVolume += lot;
-        } else {
-          globalWhale.sellValue += value;
-          globalWhale.sellVolume += lot;
-          globalWhale.sellCount++;
-        }
-      } else if (
-        tier === 'whale' ||
-        (isSplitWhale && value >= WHALE_THRESHOLD)
-      ) {
+      if (isWhale) {
         whaleNetValue += signedValue;
         whaleVolume += lot;
         if (isBuy) {
@@ -263,13 +237,8 @@ export function calculatePerSymbolOrderFlow(
           globalWhale.sellVolume += lot;
           globalWhale.sellCount++;
         }
-      } else if (
-        tier === 'dolphin' ||
-        (isSplitWhale && value >= DOLPHIN_THRESHOLD)
-      ) {
-        dolphinNetValue += signedValue;
       } else {
-        // Retail tier
+        // Retail tier (<200M)
         retailNetValue += signedValue;
         shrimpNetValue += signedValue; // Legacy compat
         shrimpVolume += lot;
@@ -310,8 +279,8 @@ export function calculatePerSymbolOrderFlow(
     else if (pressureScore <= -10) pressure = 'sell';
     else pressure = 'neutral';
 
-    // Combined whale for signal detection (Mega + Whale)
-    const combinedWhaleNetValue = megaWhaleNetValue + whaleNetValue;
+    // Whale value for signal detection (simplified 2-tier)
+    const combinedWhaleNetValue = whaleNetValue;
 
     // Determine Signal based on Combined Whale vs Retail Net Value
     let signal: SymbolOrderFlow['signal'] = 'neutral';
@@ -395,10 +364,10 @@ export function calculatePerSymbolOrderFlow(
       buyCount,
       sellCount,
       totalCount: buyCount + sellCount,
-      // TIERED stats
-      megaWhaleNetValue,
+      // 2-tier stats (megaWhale and dolphin set to 0 for backward compat)
+      megaWhaleNetValue: 0,
       whaleNetValue,
-      dolphinNetValue,
+      dolphinNetValue: 0,
       retailNetValue,
       combinedWhaleNetValue,
       // Same-broker
