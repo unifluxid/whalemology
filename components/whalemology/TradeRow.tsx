@@ -6,13 +6,23 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { AnalyzedTrade } from '@/lib/trade-analysis';
+import { VwapIndicator, TierBadge } from './TierBadge';
 
 interface TradeRowProps {
   trade: AnalyzedTrade;
   index: number;
+  // Optional enhanced data (passed from parent when available)
+  vwap?: number | null;
+  tierName?: string;
+  dynamicWhaleThreshold?: number;
 }
 
-export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
+export const TradeRow = memo(function TradeRow({
+  trade,
+  vwap,
+  tierName,
+  dynamicWhaleThreshold,
+}: TradeRowProps) {
   const { isWhale, isSplitOrder, pattern } = trade.analysis;
   const isBuy = trade.action === 'buy';
   const price = parseInt(trade.price.replace(/,/g, ''));
@@ -35,16 +45,30 @@ export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
     >
       <div className="text-muted-foreground col-span-2 flex flex-col font-mono">
         <span>{trade.time}</span>
-        {isSplitOrder && (
-          <span className="text-[9px] text-blue-400">SPLIT</span>
-        )}
+        <div className="flex items-center gap-1">
+          {isSplitOrder && (
+            <span className="text-[9px] text-blue-400">SPLIT</span>
+          )}
+          {tierName && (
+            <TierBadge tier={tierName} className="origin-left scale-75" />
+          )}
+        </div>
       </div>
 
       <div className="col-span-1 text-center font-bold">{trade.code}</div>
       <div className="col-span-3 flex flex-col text-center font-mono">
-        <span className={isBuy ? 'text-green-400' : 'text-red-400'}>
-          {price.toLocaleString()}
-        </span>
+        <div className="flex items-center justify-center gap-1">
+          <span className={isBuy ? 'text-green-400' : 'text-red-400'}>
+            {price.toLocaleString()}
+          </span>
+          {vwap && vwap > 0 && (
+            <VwapIndicator
+              tradePrice={price}
+              vwap={vwap}
+              action={trade.action}
+            />
+          )}
+        </div>
         <span className="text-muted-foreground text-[10px]">
           {trade.change}
         </span>
@@ -135,6 +159,54 @@ export const TradeRow = memo(function TradeRow({ trade }: TradeRowProps) {
                   </span>
                 </div>
               </div>
+              {/* Enhanced info section */}
+              {(vwap || tierName || dynamicWhaleThreshold) && (
+                <div className="border-border space-y-1 border-t pt-2 text-xs">
+                  {tierName && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">
+                        Market Cap Tier:
+                      </span>
+                      <TierBadge tier={tierName} />
+                    </div>
+                  )}
+                  {vwap && vwap > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">VWAP:</span>
+                      <span className="text-foreground font-mono">
+                        {vwap.toLocaleString()}
+                      </span>
+                      <span
+                        className={
+                          price > vwap
+                            ? 'text-green-400'
+                            : price < vwap
+                              ? 'text-red-400'
+                              : 'text-muted-foreground'
+                        }
+                      >
+                        (
+                        {price > vwap
+                          ? `+${(((price - vwap) / vwap) * 100).toFixed(2)}%`
+                          : `${(((price - vwap) / vwap) * 100).toFixed(2)}%`}
+                        )
+                      </span>
+                    </div>
+                  )}
+                  {dynamicWhaleThreshold && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">
+                        Whale Threshold:
+                      </span>
+                      <span className="text-foreground font-mono">
+                        {dynamicWhaleThreshold >= 1_000_000_000
+                          ? `Rp ${(dynamicWhaleThreshold / 1_000_000_000).toFixed(1)}B`
+                          : `Rp ${(dynamicWhaleThreshold / 1_000_000).toFixed(0)}M`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
               {(isWhale || isSplitOrder) && (
                 <div className="border-border space-y-1 space-x-2 border-t pt-2">
                   {isWhale && (

@@ -3,11 +3,12 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { TradeItem } from '@/lib/stockbit-types';
 
+import { detectSplitWhales, isSameBrokerTrade } from '@/lib/split-detection';
 import {
-  detectSplitWhales,
-  isSameBrokerTrade,
-  WHALE_THRESHOLD,
-} from '@/lib/split-detection';
+  getDynamicThresholds,
+  StockThresholdData,
+} from '@/lib/analysis-config';
+import type { StockMarketData } from '@/services/market-cap-service';
 
 // Stats per tier
 export interface TierStats {
@@ -86,6 +87,14 @@ export interface SymbolOrderFlow {
   // Entry Strategy
   whaleVWAP: number;
   bestEntryPrice: number;
+
+  // Enhanced UI fields (from market cap service)
+  tierName?: string; // Market cap tier: MEGA, LARGE, MID, SMALL, MICRO, NANO
+  dynamicWhaleThreshold?: number; // The threshold used for this stock
+  isHighVolume?: boolean; // True if relative volume > 2x
+  relativeVolume?: number; // e.g., 2.5 means 250% of normal volume
+  vwap?: number | null; // Volume-weighted average price from TradingView
+  macd?: number | null; // MACD for momentum context
 }
 
 export interface OrderFlowResult {
@@ -114,9 +123,12 @@ export interface OrderFlowResult {
 
 /**
  * Calculate order flow statistics per symbol from trade data.
+ * @param trades - Array of trade items to analyze
+ * @param stockDataMap - Optional map of stock data for dynamic thresholds
  */
 export function calculatePerSymbolOrderFlow(
-  trades: TradeItem[]
+  trades: TradeItem[],
+  stockDataMap?: Map<string, StockMarketData> | null
 ): OrderFlowResult {
   const symbolMap = new Map<string, TradeItem[]>();
 
@@ -141,7 +153,7 @@ export function calculatePerSymbolOrderFlow(
   };
 
   // --- SPLIT ORDER DETECTION (Conservative) ---
-  const { splitTrades } = detectSplitWhales(trades);
+  const { splitTrades } = detectSplitWhales(trades, stockDataMap);
 
   let totalBuyVolume = 0;
   let totalSellVolume = 0;
@@ -159,6 +171,20 @@ export function calculatePerSymbolOrderFlow(
   const symbolStats: SymbolOrderFlow[] = [];
 
   for (const [symbol, symbolTrades] of symbolMap) {
+    // Get dynamic threshold for this symbol
+    const stockData = stockDataMap?.get(symbol);
+    const thresholdData: StockThresholdData | null = stockData
+      ? {
+          marketCap: stockData.marketCap,
+          avgDailyValue: stockData.avgDailyValue,
+          relativeVolume: stockData.relativeVolume,
+          vwap: stockData.vwap,
+          macd: stockData.macd,
+        }
+      : null;
+    const { whaleThreshold, tierName, isHighVolume, vwap, macd } =
+      getDynamicThresholds(thresholdData);
+
     let buyVolume = 0;
     let sellVolume = 0;
     let buyValue = 0;
@@ -218,10 +244,11 @@ export function calculatePerSymbolOrderFlow(
         continue;
       }
 
-      // Simple 2-tier Bucketing: Whale (≥200M) vs Retail (<200M)
+      // Dynamic 2-tier Bucketing using market cap-based threshold
+      // Uses dynamic whaleThreshold based on stock's market cap tier
       const isSplitWhale = splitTrades.has(trade);
       const signedValue = isBuy ? value : -value;
-      const isWhale = value >= WHALE_THRESHOLD || isSplitWhale;
+      const isWhale = value >= whaleThreshold || isSplitWhale;
 
       if (isWhale) {
         whaleNetValue += signedValue;
@@ -385,6 +412,13 @@ export function calculatePerSymbolOrderFlow(
       signalScore,
       whaleVWAP,
       bestEntryPrice,
+      // Enhanced UI fields from dynamic thresholds
+      tierName,
+      dynamicWhaleThreshold: whaleThreshold,
+      isHighVolume,
+      relativeVolume: stockData?.relativeVolume,
+      vwap,
+      macd,
     });
 
     totalBuyVolume += buyVolume;
@@ -547,6 +581,8 @@ interface UseOrderFlowThrottledProps {
   interval?: number;
   /** Whether analysis is enabled (default: true) */
   enabled?: boolean;
+  /** Optional stock data map for dynamic thresholds */
+  stockDataMap?: Map<string, StockMarketData> | null;
 }
 
 interface UseOrderFlowThrottledResult extends OrderFlowResult {
@@ -562,18 +598,21 @@ interface UseOrderFlowThrottledResult extends OrderFlowResult {
  * THROTTLED version of useOrderFlow.
  * Runs analysis on a fixed interval (default 500ms) instead of on every change.
  * Reduces CPU usage by ~90% for large datasets with real-time updates.
+ * Now supports dynamic thresholds via stockDataMap.
  *
  * @example
  * const orderFlow = useOrderFlowThrottled({
  *   trades: rawData?.data.running_trade ?? null,
  *   interval: 500,  // Analyze every 500ms
- *   enabled: true   // Turn off when paused
+ *   enabled: true,  // Turn off when paused
+ *   stockDataMap,   // Optional: for dynamic whale thresholds
  * });
  */
 export function useOrderFlowThrottled({
   trades,
   interval = DEFAULT_THROTTLE_INTERVAL,
   enabled = true,
+  stockDataMap,
 }: UseOrderFlowThrottledProps): UseOrderFlowThrottledResult {
   const [result, setResult] = useState<OrderFlowResult>(EMPTY_RESULT);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -581,12 +620,19 @@ export function useOrderFlowThrottled({
 
   // Use ref to always have latest trades without triggering effect
   const tradesRef = useRef<TradeItem[] | null>(trades);
+  const stockDataMapRef = useRef<
+    Map<string, StockMarketData> | null | undefined
+  >(stockDataMap);
   const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Keep ref updated
+  // Keep refs updated
   useEffect(() => {
     tradesRef.current = trades;
   }, [trades]);
+
+  useEffect(() => {
+    stockDataMapRef.current = stockDataMap;
+  }, [stockDataMap]);
 
   // Run analysis on interval
   useEffect(() => {
@@ -603,6 +649,7 @@ export function useOrderFlowThrottled({
     // Immediate first analysis
     const runAnalysis = () => {
       const currentTrades = tradesRef.current;
+      const currentStockData = stockDataMapRef.current;
 
       if (!currentTrades || currentTrades.length === 0) {
         setResult(EMPTY_RESULT);
@@ -614,7 +661,10 @@ export function useOrderFlowThrottled({
 
       // Use requestAnimationFrame to yield to UI thread
       requestAnimationFrame(() => {
-        const analysisResult = calculatePerSymbolOrderFlow(currentTrades);
+        const analysisResult = calculatePerSymbolOrderFlow(
+          currentTrades,
+          currentStockData
+        );
         setResult(analysisResult);
         setIsAnalyzing(false);
         setLastAnalyzedAt(Date.now());

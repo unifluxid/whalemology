@@ -3,9 +3,20 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { TrendingUp, TrendingDown, Flame } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SymbolOrderFlow, OrderFlowResult } from '@/hooks/use-order-flow';
+import {
+  TierBadge,
+  VolumeFire,
+  ThresholdInfo,
+  MomentumAlignment,
+} from './TierBadge';
 
 interface HotStocksCardProps {
   data: OrderFlowResult;
@@ -58,101 +69,191 @@ function SymbolFlowItem({
         bgColor
       )}
     >
-      {/* Header: Symbol & Pressure */}
+      {/* Header: Symbol, Tier Badge & Volume Fire */}
       <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <span className="text-base font-bold">{item.symbol}</span>
+          <TierBadge tier={item.tierName} />
+          <VolumeFire
+            relativeVolume={item.relativeVolume}
+            isHighVolume={item.isHighVolume}
+          />
           {isBuy ? (
             <TrendingUp className={cn('h-4 w-4', textColor)} />
           ) : (
             <TrendingDown className={cn('h-4 w-4', textColor)} />
           )}
         </div>
-        {item.signal !== 'neutral' ? (
-          <Badge
-            variant="outline"
-            className={cn(
-              'font-mono text-[10px] uppercase',
-              item.signal === 'accumulation'
-                ? 'border-green-500 bg-green-500/10 text-green-600'
+        <div className="flex items-center gap-1">
+          {item.signal !== 'neutral' ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                'font-mono text-[10px] uppercase',
+                item.signal === 'accumulation'
+                  ? 'border-green-500 bg-green-500/10 text-green-600'
+                  : item.signal === 'distribution'
+                    ? 'border-red-500 bg-red-500/10 text-red-600'
+                    : item.signal === 'markup'
+                      ? 'border-blue-500 bg-blue-500/10 text-blue-500'
+                      : 'border-orange-500 bg-orange-500/10 text-orange-500'
+              )}
+            >
+              {item.signal === 'accumulation'
+                ? 'ACCUM'
                 : item.signal === 'distribution'
-                  ? 'border-red-500 bg-red-500/10 text-red-600'
+                  ? 'DIST'
                   : item.signal === 'markup'
-                    ? 'border-blue-500 bg-blue-500/10 text-blue-500'
-                    : 'border-orange-500 bg-orange-500/10 text-orange-500'
-            )}
-          >
-            {item.signal === 'accumulation'
-              ? 'ACCUM'
-              : item.signal === 'distribution'
-                ? 'DIST'
-                : item.signal === 'markup'
-                  ? 'HAKA'
-                  : 'PANIC'}
-          </Badge>
-        ) : (
-          <Badge variant="outline" className={cn('font-mono', textColor)}>
-            {item.pressureScore > 0 ? '+' : ''}
-            {item.pressureScore}%
-          </Badge>
-        )}
+                    ? 'HAKA'
+                    : 'PANIC'}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className={cn('font-mono', textColor)}>
+              {item.pressureScore > 0 ? '+' : ''}
+              {item.pressureScore}%
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Whale vs Shrimp Analysis (Per Symbol) */}
       <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
         {/* Whale */}
-        <div className="bg-background/60 flex items-center gap-1.5 rounded-md p-1.5 shadow-sm">
-          <span role="img" aria-label="whale">
-            🐋
-          </span>
-          <span
-            className={cn(
-              'font-mono font-bold',
-              item.whaleNetValue > 0
-                ? 'text-green-600'
-                : item.whaleNetValue < 0
-                  ? 'text-red-600'
-                  : 'text-muted-foreground'
-            )}
-          >
-            {item.whaleNetValue > 0 ? '+' : ''}
-            {formatNumber(item.whaleNetValue)}
-          </span>
-        </div>
+        <Tooltip delayDuration={200}>
+          <TooltipTrigger asChild>
+            <div className="bg-background/60 flex cursor-help items-center gap-1.5 rounded-md p-1.5 shadow-sm">
+              <span role="img" aria-label="whale">
+                🐋
+              </span>
+              <span
+                className={cn(
+                  'font-mono font-bold',
+                  item.whaleNetValue > 0
+                    ? 'text-green-600'
+                    : item.whaleNetValue < 0
+                      ? 'text-red-600'
+                      : 'text-muted-foreground'
+                )}
+              >
+                {item.whaleNetValue > 0 ? '+' : ''}
+                {formatNumber(item.whaleNetValue)}
+              </span>
+              {item.dynamicWhaleThreshold && (
+                <ThresholdInfo
+                  threshold={item.dynamicWhaleThreshold}
+                  tierName={item.tierName}
+                />
+              )}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            <div className="space-y-1">
+              <div className="font-semibold">🐋 Whale Net Flow</div>
+              <div className="text-muted-foreground text-xs">
+                Net value of large trades (whale buys - whale sells).
+                {item.whaleNetValue > 0
+                  ? ' Positive = whale accumulation'
+                  : item.whaleNetValue < 0
+                    ? ' Negative = whale distribution'
+                    : ' Zero = balanced'}
+              </div>
+              {item.dynamicWhaleThreshold && (
+                <div className="text-muted-foreground text-[10px]">
+                  Whale threshold: ≥{formatNumber(item.dynamicWhaleThreshold)}{' '}
+                  IDR ({item.tierName || 'UNKNOWN'} cap)
+                </div>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
         {/* Shrimp */}
-        <div className="bg-background/60 flex items-center justify-end gap-1.5 rounded-md p-1.5 shadow-sm">
-          <span
-            className={cn(
-              'font-mono font-bold',
-              item.shrimpNetValue > 0
-                ? 'text-green-600'
-                : item.shrimpNetValue < 0
-                  ? 'text-red-600'
-                  : 'text-muted-foreground'
-            )}
-          >
-            {item.shrimpNetValue > 0 ? '+' : ''}
-            {formatNumber(item.shrimpNetValue)}
-          </span>
-          <span role="img" aria-label="shrimp">
-            🦐
-          </span>
-        </div>
+        <Tooltip delayDuration={200}>
+          <TooltipTrigger asChild>
+            <div className="bg-background/60 flex cursor-help items-center justify-end gap-1.5 rounded-md p-1.5 shadow-sm">
+              <span
+                className={cn(
+                  'font-mono font-bold',
+                  item.shrimpNetValue > 0
+                    ? 'text-green-600'
+                    : item.shrimpNetValue < 0
+                      ? 'text-red-600'
+                      : 'text-muted-foreground'
+                )}
+              >
+                {item.shrimpNetValue > 0 ? '+' : ''}
+                {formatNumber(item.shrimpNetValue)}
+              </span>
+              <span role="img" aria-label="shrimp">
+                🦐
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            <div className="space-y-1">
+              <div className="font-semibold">🦐 Retail Net Flow</div>
+              <div className="text-muted-foreground text-xs">
+                Net value of small trades (retail buys - retail sells).
+                {item.shrimpNetValue > 0
+                  ? ' Positive = retail buying'
+                  : item.shrimpNetValue < 0
+                    ? ' Negative = retail selling'
+                    : ' Zero = balanced'}
+              </div>
+              <div className="text-muted-foreground text-[10px] italic">
+                Tip: When whales buy but shrimp sell, it may signal smart money
+                accumulation.
+              </div>
+            </div>
+          </TooltipContent>
+        </Tooltip>
       </div>
 
-      {/* Buy/Sell Bar */}
-      <div className="mb-2">
-        <div className="bg-background/30 flex h-1.5 overflow-hidden rounded-full">
-          <div
-            className="bg-green-500 transition-all duration-300"
-            style={{ width: `${item.buyPercentage}%` }}
-          />
-          <div
-            className="bg-red-500 transition-all duration-300"
-            style={{ width: `${item.sellPercentage}%` }}
+      {/* MACD Alignment indicator */}
+      {item.macd !== undefined && item.macd !== null && (
+        <div className="mb-2 flex justify-center">
+          <MomentumAlignment
+            dominantAction={
+              item.whaleNetValue > 0
+                ? 'ACCUMULATION'
+                : item.whaleNetValue < 0
+                  ? 'DISTRIBUTION'
+                  : 'NEUTRAL'
+            }
+            macd={item.macd}
           />
         </div>
-      </div>
+      )}
+
+      {/* Buy/Sell Bar */}
+      <Tooltip delayDuration={200}>
+        <TooltipTrigger asChild>
+          <div className="mb-2 cursor-help">
+            <div className="bg-background/30 flex h-1.5 overflow-hidden rounded-full">
+              <div
+                className="bg-green-500 transition-all duration-300"
+                style={{ width: `${item.buyPercentage}%` }}
+              />
+              <div
+                className="bg-red-500 transition-all duration-300"
+                style={{ width: `${item.sellPercentage}%` }}
+              />
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          <div className="space-y-1">
+            <div className="font-semibold">Buy/Sell Ratio</div>
+            <div className="text-muted-foreground flex justify-between text-xs">
+              <span className="text-green-500">
+                Buy: {item.buyPercentage.toFixed(1)}%
+              </span>
+              <span className="text-red-500">
+                Sell: {item.sellPercentage.toFixed(1)}%
+              </span>
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
 
       {/* Basic Stats */}
       <div className="text-muted-foreground flex justify-between text-[10px]">

@@ -35,13 +35,13 @@ const data = {
   ],
   navMain: [
     {
-      title: 'Dashboard',
+      title: 'Whalemology',
       url: '/whalemology',
       icon: LayoutDashboard,
       isActive: true,
       items: [
         {
-          title: 'Overview',
+          title: 'Stock Analysis',
           url: '/whalemology',
         },
       ],

@@ -1,6 +1,11 @@
 import { TradeItem } from '@/lib/stockbit-types';
+import {
+  getDynamicThresholds,
+  StockThresholdData,
+} from '@/lib/analysis-config';
+import type { StockMarketData } from '@/services/market-cap-service';
 
-// Tiered Whale Thresholds (in IDR)
+// Tiered Whale Thresholds (in IDR) - Legacy/default values
 export const MEGA_WHALE_THRESHOLD = 500_000_000; // 500 juta - Institutional level
 export const WHALE_THRESHOLD = 200_000_000; // 200 juta - Semi-institutional
 export const DOLPHIN_THRESHOLD = 100_000_000; // 100 juta - Affluent traders / small bandar
@@ -52,14 +57,40 @@ export interface SplitDetectionResult {
   splitEventCount: number;
   totalSplitValue: number;
   splitIntensityScore: number;
+  dynamicSplitThreshold: number;
 }
 
-export function detectSplitWhales(trades: TradeItem[]): SplitDetectionResult {
+export interface SplitDetectionOptions {
+  stockData?: StockThresholdData | null;
+}
+
+/**
+ * Detects Split Whale Orders using Conservative Logic.
+ *
+ * Logic:
+ * 1. Groups trades by Symbol + Time (Seconds) + Action + Price
+ * 2. Checks if Group Total Value >= dynamic threshold (based on market cap + volume)
+ * 3. Checks if Group contains at least 2 trades
+ *
+ * Thresholds are adjusted based on:
+ * - Market cap tier
+ * - Average daily trading value
+ * - Relative volume (higher volume = more sensitive detection)
+ *
+ * @param trades - List of trades to analyze
+ * @param stockDataMap - Optional map of stock data for per-symbol dynamic thresholds
+ * @returns Set of TradeItems that are part of a split whale order
+ */
+export function detectSplitWhales(
+  trades: TradeItem[],
+  stockDataMap?: Map<string, StockMarketData> | null
+): SplitDetectionResult {
   const splitGroups = new Map<string, TradeItem[]>();
   const splitWhaleTrades = new Set<TradeItem>();
   let splitEventCount = 0;
   let totalSplitValue = 0;
   let splitIntensityScore = 0;
+  let lastSplitThreshold = 0;
 
   for (const trade of trades) {
     if (!trade.time || !trade.price) continue;
@@ -80,6 +111,23 @@ export function detectSplitWhales(trades: TradeItem[]): SplitDetectionResult {
   for (const group of splitGroups.values()) {
     if (group.length < 2) continue; // Must be at least 2 trades to be a "split"
 
+    // Get symbol from first trade in group
+    const symbol = group[0].code;
+
+    // Get dynamic threshold for this symbol
+    const stockData = stockDataMap?.get(symbol);
+    const thresholdData: StockThresholdData | null = stockData
+      ? {
+          marketCap: stockData.marketCap,
+          avgDailyValue: stockData.avgDailyValue,
+          relativeVolume: stockData.relativeVolume,
+          vwap: stockData.vwap,
+          macd: stockData.macd,
+        }
+      : null;
+    const { splitThreshold } = getDynamicThresholds(thresholdData);
+    lastSplitThreshold = splitThreshold;
+
     let totalGroupValue = 0;
     for (const t of group) {
       const lot = (t.lotNum ?? Number(t.lot)) || 0;
@@ -89,8 +137,8 @@ export function detectSplitWhales(trades: TradeItem[]): SplitDetectionResult {
       totalGroupValue += val;
     }
 
-    // If aggregate value exceeds Whale Threshold, mark ALL as Whale
-    if (totalGroupValue >= CONSERVATIVE_WHALE_THRESHOLD) {
+    // If aggregate value exceeds dynamic threshold, mark ALL as split whale
+    if (totalGroupValue >= splitThreshold) {
       splitEventCount++;
       totalSplitValue += totalGroupValue;
 
@@ -110,5 +158,6 @@ export function detectSplitWhales(trades: TradeItem[]): SplitDetectionResult {
     splitEventCount,
     totalSplitValue,
     splitIntensityScore,
+    dynamicSplitThreshold: lastSplitThreshold,
   };
 }

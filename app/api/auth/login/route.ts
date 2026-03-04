@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const TARGET_URL = 'https://exodus.stockbit.com/login/v5/username';
+const TARGET_URL = 'https://exodus.stockbit.com/login/v6/username';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,11 +18,16 @@ export async function POST(request: NextRequest) {
       headers: {
         Host: 'exodus.stockbit.com',
         Accept: 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
+        'Sec-Fetch-Site': 'cross-site',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Mode': 'cors',
+        Origin: 'tauri://localhost',
         'User-Agent':
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15',
         'X-Platform': 'desktop',
-        Origin: 'tauri://localhost',
+        Connection: 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
     });

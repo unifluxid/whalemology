@@ -5,6 +5,11 @@ import {
   aggregateStockAnomalies,
   AggregateStockAnomaliesOptions,
 } from '@/lib/trade-analysis';
+import {
+  getMarketCapCache,
+  StockMarketData,
+} from '@/services/market-cap-service';
+import { StockThresholdData } from '@/lib/analysis-config';
 
 interface AnalysisFilters {
   minConfidenceScore: number;
@@ -52,6 +57,9 @@ export function useTradeAnalysis({
   const analysisIdRef = useRef(0); // Track current analysis to cancel stale ones
   const cancelRef = useRef(false); // Flag to cancel in-progress analysis
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stockDataCacheRef = useRef<Map<string, StockThresholdData> | null>(
+    null
+  );
 
   // Keep refs updated inside useEffect to avoid updating refs during render
   useEffect(() => {
@@ -66,6 +74,36 @@ export function useTradeAnalysis({
     () => ({ hideBrokerNames: options.hideBrokerNames ?? false }),
     [options.hideBrokerNames]
   );
+
+  // Load market cap cache on mount
+  useEffect(() => {
+    const loadMarketCaps = async () => {
+      try {
+        const cache = await getMarketCapCache();
+        // Convert StockMarketData map to StockThresholdData map
+        const stockDataMap = new Map<string, StockThresholdData>();
+        cache.forEach((data: StockMarketData, symbol: string) => {
+          stockDataMap.set(symbol, {
+            marketCap: data.marketCap,
+            avgDailyValue: data.avgDailyValue,
+            relativeVolume: data.relativeVolume,
+            vwap: data.vwap,
+            macd: data.macd,
+          });
+        });
+        stockDataCacheRef.current = stockDataMap;
+        console.log(
+          '[useTradeAnalysis] Loaded stock data for',
+          stockDataMap.size,
+          'stocks (with volume, VWAP, MACD)'
+        );
+      } catch (error) {
+        console.warn('[useTradeAnalysis] Failed to load stock data:', error);
+        stockDataCacheRef.current = null;
+      }
+    };
+    loadMarketCaps();
+  }, []);
 
   // Core analysis function (doesn't depend on trades directly)
   const executeAnalysis = useCallback(async () => {
@@ -89,10 +127,10 @@ export function useTradeAnalysis({
       setProgress(50);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const allAnomalies = aggregateStockAnomalies(
-        currentTrades,
-        stableOptions
-      );
+      const allAnomalies = aggregateStockAnomalies(currentTrades, {
+        ...stableOptions,
+        stockDataMap: stockDataCacheRef.current ?? undefined,
+      });
       const filtered = filterAnomalies(
         allAnomalies,
         minConfidenceScore,
@@ -140,10 +178,10 @@ export function useTradeAnalysis({
 
       for (const symbol of batchSymbols) {
         const symbolTrades = stocksMap.get(symbol)!;
-        const symbolAnomalies = aggregateStockAnomalies(
-          symbolTrades,
-          stableOptions
-        );
+        const symbolAnomalies = aggregateStockAnomalies(symbolTrades, {
+          ...stableOptions,
+          stockDataMap: stockDataCacheRef.current ?? undefined,
+        });
         results.push(...symbolAnomalies);
       }
 

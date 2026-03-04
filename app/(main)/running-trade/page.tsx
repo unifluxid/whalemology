@@ -41,6 +41,7 @@ import { useSymbolSearch } from '@/hooks/use-symbol-search';
 import { useRunningTrades } from '@/hooks/use-running-trades';
 import { useRunningTradeWS } from '@/hooks/use-running-trade-ws';
 import { useOrderFlowThrottled } from '@/hooks/use-order-flow';
+import { useStockData } from '@/hooks/use-stock-data';
 import useDatafeedSocket from '@/lib/datafeed/useDatafeedSocket';
 import {
   useRunningTradeStore,
@@ -49,6 +50,9 @@ import {
 
 export default function GlobalRunningTradePage() {
   const { token, user } = useAuthStore();
+
+  // 0. Stock data for enhanced analysis (VWAP, market cap, etc.)
+  const { stockDataMap } = useStockData();
 
   // 1. Filter Hook
   const {
@@ -355,6 +359,7 @@ export default function GlobalRunningTradePage() {
       filteredTradesForAnalysis.length > 0 ? filteredTradesForAnalysis : null,
     interval: 500, // Analyze every 500ms instead of every change
     // Always enabled - Market Radar should analyze even when WS is paused
+    stockDataMap, // Pass stock data for dynamic thresholds
   });
 
   // Title effect
@@ -550,6 +555,7 @@ export default function GlobalRunningTradePage() {
                   sortOrder={sortOrder}
                   onSortChange={handleSortChange}
                   onUserScroll={handleUserScroll}
+                  stockDataMap={stockDataMap ?? undefined}
                 />
               )}
             </div>

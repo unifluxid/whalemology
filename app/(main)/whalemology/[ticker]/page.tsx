@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store';
 import { StockHeader } from '@/components/whalemology/StockHeader';
 import { BrokerTable } from '@/components/whalemology/BrokerTable';
 import { TradeFeed } from '@/components/whalemology/TradeFeed';
+import { useStockData } from '@/hooks/use-stock-data';
 
 import {
   getEmittenInfo,
@@ -31,6 +32,7 @@ interface PageProps {
 export default function WhalemologyDashboard({ params }: PageProps) {
   const { ticker } = use(params);
   const { token } = useAuthStore();
+  const { stockDataMap } = useStockData();
 
   const [data, setData] = useState<DashboardData>({
     emittenInfo: null,
@@ -172,6 +174,7 @@ export default function WhalemologyDashboard({ params }: PageProps) {
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSortChange={handleSortChange}
+              stockDataMap={stockDataMap ?? undefined}
             />
           </div>
         </div>

@@ -6,6 +6,8 @@ import { useMemo, useRef, useLayoutEffect } from 'react';
 import { TradeRow } from './TradeRow';
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import type { StockMarketData } from '@/services/market-cap-service';
+import { getDynamicThresholds } from '@/lib/analysis-config';
 
 interface TradeFeedProps {
   data: RunningTrade;
@@ -15,6 +17,8 @@ interface TradeFeedProps {
   sortOrder: 'asc' | 'desc';
   onSortChange: (sortBy: 'time' | 'lot') => void;
   onUserScroll?: () => void;
+  // Optional enhanced stock data for VWAP/threshold display
+  stockDataMap?: Map<string, StockMarketData>;
 }
 
 export function TradeFeed({
@@ -25,7 +29,10 @@ export function TradeFeed({
   sortOrder,
   onSortChange,
   onUserScroll,
+  stockDataMap,
 }: TradeFeedProps) {
+  // Note: analyzeTrades uses a single stock's data, but TradeFeed can show multiple stocks.
+  // For multi-stock feed, we pass no options and rely on per-trade lookup in TradeRow.
   const { analyzedTrades } = useMemo(
     () => analyzeTrades(data.data.running_trade),
     [data.data.running_trade]
@@ -164,25 +171,42 @@ export function TradeFeed({
                     position: 'relative',
                   }}
                 >
-                  {virtualizer.getVirtualItems().map((virtualItem) => (
-                    <div
-                      key={virtualItem.key}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: `${virtualItem.size}px`,
-                        transform: `translateY(${virtualItem.start}px)`,
-                      }}
-                      className="px-2"
-                    >
-                      <TradeRow
-                        trade={analyzedTrades[virtualItem.index]}
-                        index={virtualItem.index}
-                      />
-                    </div>
-                  ))}
+                  {virtualizer.getVirtualItems().map((virtualItem) => {
+                    const trade = analyzedTrades[virtualItem.index];
+                    const stockData = stockDataMap?.get(trade.code);
+                    // Get tier name and thresholds from stock data
+                    const thresholds = stockData
+                      ? getDynamicThresholds({
+                          marketCap: stockData.marketCap,
+                          avgDailyValue: stockData.avgDailyValue,
+                          relativeVolume: stockData.relativeVolume,
+                          vwap: stockData.vwap,
+                          macd: stockData.macd,
+                        })
+                      : null;
+                    return (
+                      <div
+                        key={virtualItem.key}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: `${virtualItem.size}px`,
+                          transform: `translateY(${virtualItem.start}px)`,
+                        }}
+                        className="px-2"
+                      >
+                        <TradeRow
+                          trade={trade}
+                          index={virtualItem.index}
+                          vwap={stockData?.vwap}
+                          tierName={thresholds?.tierName}
+                          dynamicWhaleThreshold={thresholds?.whaleThreshold}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

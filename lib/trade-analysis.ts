@@ -1,5 +1,9 @@
 import { TradeItem } from './stockbit-types';
-import { ANALYSIS_CONFIG } from './analysis-config';
+import {
+  ANALYSIS_CONFIG,
+  getDynamicThresholds,
+  StockThresholdData,
+} from './analysis-config';
 import { detectSplitWhales } from './split-detection';
 import { detectWhales } from './whale-detection';
 
@@ -25,6 +29,11 @@ export interface TradeAnalysisSummary {
   totalVolume: number;
   totalSplitValue: number;
   splitIntensityScore: number;
+  tierName?: string; // Market cap tier used for thresholds
+  dynamicWhaleThreshold?: number;
+  dynamicSplitThreshold?: number;
+  isHighVolume?: boolean; // True if relative volume > 2x
+  vwap?: number | null;
 }
 
 // Structured reason item (no HTML in data layer)
@@ -48,10 +57,18 @@ export interface StockAnomaly {
   topBrokers: Array<{ broker: string; count: number; action: string }>;
   dominantAction: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL';
   lastUpdate: string;
+  // New fields for enhanced UI
+  tierName?: string; // Market cap tier: MEGA, LARGE, MID, SMALL, MICRO, NANO
+  dynamicWhaleThreshold?: number; // The threshold used for this stock
+  isHighVolume?: boolean; // True if relative volume > 2x
+  relativeVolume?: number; // e.g., 2.5 means 250% of normal volume
+  vwap?: number | null; // Volume-weighted average price
+  macd?: number | null; // MACD for momentum context
 }
 
 export interface AggregateStockAnomaliesOptions {
   hideBrokerNames?: boolean;
+  stockDataMap?: Map<string, StockThresholdData>; // Symbol -> Full stock data mapping
 }
 
 // ----------------------------------------------------------------------
@@ -123,13 +140,30 @@ function classifyTradePattern(
 // Main Logic
 // ----------------------------------------------------------------------
 
-export function analyzeTrades(trades: TradeItem[]): {
+export interface AnalyzeTradesOptions {
+  stockData?: StockThresholdData | null;
+}
+
+export function analyzeTrades(
+  trades: TradeItem[],
+  options: AnalyzeTradesOptions = {}
+): {
   analyzedTrades: AnalyzedTrade[];
   summary: TradeAnalysisSummary;
 } {
   const sourceTrades = trades;
   // Pre-allocate to avoid repeated resizing if possible (though JS engines handle this well)
   const analyzedTrades: AnalyzedTrade[] = [];
+
+  // Get dynamic thresholds based on full stock data (market cap, volume, etc.)
+  const {
+    minSignificantValue,
+    tierName,
+    whaleThreshold,
+    splitThreshold,
+    isHighVolume,
+    vwap,
+  } = getDynamicThresholds(options.stockData ?? null);
 
   if (!sourceTrades || sourceTrades.length === 0) {
     return {
@@ -143,12 +177,16 @@ export function analyzeTrades(trades: TradeItem[]): {
         totalVolume: 0,
         totalSplitValue: 0,
         splitIntensityScore: 0,
+        tierName,
+        dynamicWhaleThreshold: whaleThreshold,
+        dynamicSplitThreshold: splitThreshold,
+        isHighVolume,
+        vwap,
       },
     };
   }
 
   const {
-    MIN_SIGNIFICANT_VALUE,
     TIME_DECAY_HALF_LIFE,
     MIN_TOTAL_SCORE,
     IMBALANCE_THRESHOLD,
@@ -207,18 +245,45 @@ export function analyzeTrades(trades: TradeItem[]): {
   // -------------------------------------
 
   // A. Detect Split Whales (Aggregated)
+  // Create a single-stock stockDataMap for backward compatibility
+  const firstCode = enrichedList[0]?.code || '';
+  const singleStockDataMap = options.stockData
+    ? new Map<string, import('@/services/market-cap-service').StockMarketData>([
+        [
+          firstCode,
+          {
+            symbol: firstCode,
+            name: firstCode,
+            marketCap: options.stockData.marketCap ?? 0,
+            close: 0,
+            change: 0,
+            volume: 0,
+            sector: '',
+            relativeVolume: options.stockData.relativeVolume ?? 1,
+            vwap: options.stockData.vwap ?? 0,
+            macd: options.stockData.macd ?? 0,
+            avgDailyValue: options.stockData.avgDailyValue ?? 0,
+          },
+        ],
+      ])
+    : null;
+
   const {
     splitTrades,
     splitEventCount: splitOrderCount,
     totalSplitValue,
     splitIntensityScore,
-  } = detectSplitWhales(enrichedList);
+    dynamicSplitThreshold,
+  } = detectSplitWhales(enrichedList, singleStockDataMap);
 
   // B. Detect Single Whales (Obvious)
-  const { whaleTrades, whaleCount } = detectWhales(
-    enrichedList,
-    averageTradeValue
-  );
+  const {
+    whaleTrades,
+    whaleCount,
+    dynamicThreshold: dynamicWhaleThreshold,
+  } = detectWhales(enrichedList, averageTradeValue, {
+    stockData: options.stockData,
+  });
 
   // C. Detect Shrimps (The Rest)
   // implicit, but we can verify consistency if needed
@@ -236,7 +301,7 @@ export function analyzeTrades(trades: TradeItem[]): {
     // const isShrimp = shrimpTrades.has(t);
 
     const isSignificant =
-      (isWhale || isSplit) && t.value! >= MIN_SIGNIFICANT_VALUE;
+      (isWhale || isSplit) && t.value! >= minSignificantValue;
 
     // Calculate time decay using cached seconds
     const ageMinutes = (maxSeconds - t.seconds!) / 60;
@@ -312,6 +377,11 @@ export function analyzeTrades(trades: TradeItem[]): {
       totalVolume,
       totalSplitValue,
       splitIntensityScore,
+      tierName,
+      dynamicWhaleThreshold,
+      dynamicSplitThreshold,
+      isHighVolume,
+      vwap,
     },
   };
 }
@@ -320,7 +390,7 @@ export function aggregateStockAnomalies(
   trades: TradeItem[],
   options: AggregateStockAnomaliesOptions = {}
 ): StockAnomaly[] {
-  const { hideBrokerNames = false } = options;
+  const { hideBrokerNames = false, stockDataMap } = options;
 
   // Group by symbol first
   const stocksMap = new Map<string, TradeItem[]>();
@@ -336,7 +406,12 @@ export function aggregateStockAnomalies(
   const anomalies: StockAnomaly[] = [];
 
   for (const [symbol, stockTrades] of stocksMap.entries()) {
-    const { analyzedTrades, summary } = analyzeTrades(stockTrades);
+    // Get full stock data for this symbol if available
+    const stockData = stockDataMap?.get(symbol) ?? null;
+
+    const { analyzedTrades, summary } = analyzeTrades(stockTrades, {
+      stockData,
+    });
 
     // Filter out stocks that won't be displayed:
     // 1. NEUTRAL dominant action (AnomalyCard only shows ACCUMULATION/DISTRIBUTION)
@@ -472,6 +547,13 @@ export function aggregateStockAnomalies(
       topBrokers: finalBrokers,
       dominantAction: summary.dominantAction,
       lastUpdate,
+      // Enhanced UI fields from stock data
+      tierName: summary.tierName,
+      dynamicWhaleThreshold: summary.dynamicWhaleThreshold,
+      isHighVolume: summary.isHighVolume,
+      relativeVolume: stockData?.relativeVolume ?? undefined,
+      vwap: summary.vwap,
+      macd: stockData?.macd ?? undefined,
     };
 
     anomalies.push(anomalyObj);
